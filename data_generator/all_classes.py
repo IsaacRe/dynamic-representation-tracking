@@ -1,4 +1,4 @@
-classes = [
+all_classes = [
     'bag',
     'baseball',
     'binoculars',

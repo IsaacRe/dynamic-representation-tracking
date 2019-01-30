@@ -37,7 +37,8 @@ class DataGenerator(object):
     def info(self):
         outStr = ' n_frames: %d \n resolution: %d \n model_name: %s \n'\
                  ' n_exposures: %d \n total_exposures: %d \n ' % (
-            self.n_frames, self.resolution, self.model_name, self.n_exposures, self.total_exposures)
+                    self.n_frames, self.resolution, self.model_name, 
+                    self.n_exposures, self.total_exposures)
         print(outStr)
 
     def getDataUnit(self):
