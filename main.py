@@ -159,9 +159,9 @@ if args.num_iters > args.total_classes:
 
 # loading mean image; resizing to rendered image size if necessary
 mean_image = np.load('data_generator/mean_image.npy')
-mean_image.astype(np.float32)
 mean_image = cv2.resize(
     mean_image, (args.rendered_img_size, args.rendered_img_size))
+mean_image = np.uint8(mean_image)
 
 # To pass to dataloaders for preallocation
 max_train_data_size = 2 * args.dunit_length + args.num_exemplars
@@ -176,7 +176,7 @@ class_map = {cl_name: idx for idx,
              cl_name in enumerate(all_classes.all_classes)}
 classes_seen = []
 model_classes_seen = []  # Class index numbers stored by model
-exemplar_sets = []  # Exemplar set information, more in model
+exemplar_data = []  # Exemplar set information, more in model
 # acc_matr row index represents class number and column index represents
 # learning exposure.
 acc_matr = np.zeros((args.total_classes, args.num_iters))
@@ -250,6 +250,12 @@ if args.resume:
 
 def train_run(device):
     train_set = None
+    if args.algo == 'e2e':
+        # Empty train set which would be combined 
+        # with exemplars for balanced finetuning
+        bf_train_set = iToys(args, mean_image, data_generators=[], 
+                             max_data_size=max_train_data_size,
+                             job='train')
     model.cuda(device=device)
     s = len(classes_seen)
     print('####### Train Process Running ########')
@@ -277,6 +283,12 @@ def train_run(device):
         # Boolean to store if the current iteration saw a new class
         curr_expanded = False
 
+        # Keep a copy of previous model for distillation
+        prev_model = copy.deepcopy(model)
+        prev_model.cuda(device=device)
+        for p in prev_model.parameters():
+            p.requires_grad = False
+
         if curr_class not in model.classes_map:
             model.increment_classes([curr_class])
             model.cuda(device=device)
@@ -292,54 +304,83 @@ def train_run(device):
 
         if train_set is None:
             train_set = iToys(args, mean_image, 
-                             [data_generators[curr_class_idx]], 
-                             max_train_data_size, 
-                             [curr_class], model.classes_map, 
-                             'train', du_idx=s)
+                              [data_generators[curr_class_idx]], 
+                              max_train_data_size, 
+                              [curr_class], model.classes_map, 
+                              'train', du_idx=s)
         else:
             train_set.pseudo_init(args, [data_generators[curr_class_idx]], 
                                   [curr_class], model.classes_map, 'train', 
                                   du_idx=s)
 
-        # Keep a copy of previous model for distillation
-        prev_model = copy.deepcopy(model)
-        prev_model.cuda(device=device)
-        for p in prev_model.parameters():
-            p.requires_grad = False
-
         model.train()
-        model.update_representation(train_set, prev_model, [
-                                    model_curr_class_idx], args.num_workers)
-
+        if args.algo == 'icarl' or args.algo == 'lwf':
+            model.update_representation_icarl(train_set, 
+                                              prev_model, 
+                                              [model_curr_class_idx], 
+                                              args.num_workers)
+        else:
+            model.update_representation_e2e(train_set,
+                                            prev_model,
+                                            args.num_workers,
+                                            bft=False)
+        model.eval()
         del prev_model
 
         m = int(K / model.n_classes)
-        model.eval()
 
-        # TODO : hybrid1 currently not mentioned as an option for algo, 
-        # would be removed in final release
-        if args.algo == 'icarl' or args.algo == 'hybrid1':
+        if args.algo == 'icarl' or args.algo == 'e2e':
             # Reduce exemplar sets for known classes
             model.reduce_exemplar_sets(m)
 
             # Construct exemplar sets for current class
-            print("Constructing exemplar set for class index %d , %s ..." %
+            print('Constructing exemplar set for class index %d , %s ...' %
                   (model_curr_class_idx, curr_class), end="")
-            images, du_maps, image_bbs = train_set.get_image_class(
+
+            images, image_means, du_maps, image_bbs = train_set.get_image_class(
                 model_curr_class_idx)
-            model.construct_exemplar_set(
-                images, du_maps, image_bbs, m, model_curr_class_idx, s)
+            model.construct_exemplar_set(images, image_means, du_maps, 
+                                         image_bbs, m, model_curr_class_idx, s)
             print("Done")
 
-            # list() is needed to append a copy of list
-            exemplar_sets.append(list(model.eset_du_maps))
 
+        model.n_known = model.n_classes
+
+        if args.algo == 'e2e':
+            bf_train_set.clear()
+
+            prev_model = copy.deepcopy(model)
+            prev_model.cuda(device=device)
+            for p in prev_model.parameters():
+                p.requires_grad = False
+
+            print('E2EIL Balanced Finetuning Phase')
+            model.train()
+            model.update_representation_e2e(bf_train_set,
+                                            prev_model,
+                                            args.num_workers,
+                                            bft=True)
+            model.eval()
+
+            print('Constructing exemplar set for class index %d , %s ...' %
+                  (model_curr_class_idx, curr_class), end="")
+
+            images, image_means, du_maps, image_bbs = train_set.get_image_class(
+                model_curr_class_idx)
+            model.construct_exemplar_set(images, image_means, du_maps, 
+                                         image_bbs, m, model_curr_class_idx, s)
+            print("Done")
+
+
+        print("Model num classes : %d, " % model.n_known)
+        print("Model classes : ", model.classes)
+
+        if args.algo == 'icarl' or args.algo == 'e2e':
             for y, P_y in enumerate(model.exemplar_sets):
                 print("Exemplar set for class-%d:" % (y), P_y.shape)
 
-        model.n_known = model.n_classes
-        print("Model num classes : %d, " % model.n_known)
-        print("Model classes : ", model.classes)
+            exemplar_data.append(list(model.eset_du_maps))
+
 
         cond_var.acquire()
         train_counter.value += 1
@@ -360,7 +401,7 @@ def train_run(device):
                  model_classes_seen=model_classes_seen,
                  classes_seen=classes_seen, 
                  expt_githash=expt_githash, 
-                 exemplar_sets=np.array(exemplar_sets), perm_id=perm_id)
+                 exemplar_data=np.array(exemplar_data), perm_id=perm_id)
 
         # loop var increment
         s += 1
@@ -372,11 +413,8 @@ def train_run(device):
 
 
 def test_run(device):
-    global train_counter
-    global test_counter
-    global expanded_classes
     test_set = iToys(args, mean_image, data_generators=[],
-                     max_data_size=max_test_data_size)
+                     max_data_size=max_test_data_size, job='test')
     print('####### Test Process Running ########')
     test_model = None
     s = args.test_freq * (len(classes_seen)//args.test_freq)
@@ -418,6 +456,7 @@ def test_run(device):
                                     'test', args.size_test)
 
             print("[Test Process] Test Set Length:", test_set.curr_len)
+            
 
             test_model.device = device
             test_model.cuda(device=device)
@@ -430,13 +469,14 @@ def test_run(device):
 
             print("[Test Process] Computing Accuracy matrix...")
 
-            ############# Test Accuracy computation ###########
             all_labels = []
             all_preds = []
             with torch.no_grad():
                 for indices, images, labels in test_loader:
                     images = Variable(images).cuda(device=device)
-                    preds = test_model.classify(images)
+                    preds = test_model.classify(images, 
+                                                mean_image, 
+                                                args.img_size)
                     all_preds.append(preds.data.cpu().numpy())
                     all_labels.append(labels.numpy())
             all_preds = np.concatenate(all_preds, axis=0)

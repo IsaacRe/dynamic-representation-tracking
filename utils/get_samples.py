@@ -2,7 +2,7 @@ import numpy as np
 import cv2
 import random
 
-def get_samples(images, bboxes, cl, size, class_map, job):
+def get_samples(images, bboxes, cl, size, class_map, get_negatives=True):
     '''
     Returns bounding box cropped images (+ negative 
     background patches depending on job), class labels, 
@@ -21,8 +21,8 @@ def get_samples(images, bboxes, cl, size, class_map, job):
     for row in range(images.shape[0]):
         img = images[row]
         x_min, x_max, y_min, y_max = bboxes[row]    
-        pos_img = img[y_min:y_max,x_min:x_max]
-        pos_img = cv2.resize(pos_img, (size,size))
+        pos_img = img[y_min:y_max, x_min:x_max]
+        pos_img = cv2.resize(pos_img, (size, size))
         
         xs.append(pos_img)
         if class_map is None:
@@ -32,14 +32,14 @@ def get_samples(images, bboxes, cl, size, class_map, job):
         bbs.append(bboxes[row])
         
         #if job is train then add negative samples of the data as well
-        if job == 'train': 
+        if get_negatives: 
             while (True): 
                 # Get the negative bounding box from the image outside the 
                 # original bounding box but with some overlap range
                 # Randomly select 4 points within a window specified 
                 # by rendered_img_size and e
                 amin = random.randint(0, rendered_img_size - e)
-                bmin = random.randint(0,rendered_img_size - e)
+                bmin = random.randint(0, rendered_img_size - e)
                 # Adding the resize buffer to prevent resizing 
                 # errors on very thin strips
                 amax = random.randint(amin+resize_buffer, rendered_img_size) 

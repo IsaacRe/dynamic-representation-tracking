@@ -3,6 +3,7 @@ import torch
 import cv2
 import random
 import sys
+import copy
 from color_jitter.jitter import jitter
 from utils.get_samples import get_samples
 
@@ -11,15 +12,19 @@ class iToys(torch.utils.data.Dataset):
     def __init__(self, args, mean_image, data_generators, max_data_size,
                  classes=None, class_map=None, job=None, du_idx=-1):
         self.job = job
+        self.algo = args.algo
         self.jitter = args.jitter
         self.img_size = args.img_size
 
-        self.datax = np.empty(
-            (max_data_size,
-             3,
-             self.img_size,
-             self.img_size),
-            dtype=np.float32)
+        self.datax = np.empty((max_data_size,3,
+                               self.img_size,self.img_size),
+                               dtype=np.uint8)
+        # Stores the mean image cropped out at 
+        # appropriate bounding boxes for each datax
+        self.data_means = np.empty((max_data_size, 3, 
+                                    self.img_size, self.img_size), 
+                                    dtype=np.uint8)
+
         self.datay = np.empty(max_data_size, dtype=int)
         self.bb = np.empty((max_data_size, 4), dtype=int)
         self.curr_len = 0
@@ -49,58 +54,84 @@ class iToys(torch.utils.data.Dataset):
             self.expand(args, data_generators, classes, class_map, job, du_idx)
 
     def __getitem__(self, index):
-        image = self.datax[index]
+        curr_img = np.float32(self.datax[index])
+        curr_mean = np.float32(self.data_means[index])
         bb = self.bb[index]
 
         if self.job == 'train':
-            # Augment : Color jittering
-            if self.jitter:
-                x_min = int(bb[0])
-                x_max = int(bb[1])
-                y_min = int(bb[2])
-                y_max = int(bb[3])
-                cropped_mean = cv2.resize(
-                    self.mean_image[y_min:y_max, x_min:x_max], 
-                    (self.img_size, self.img_size))
-                # cropped_mean final shape : 3ximg_sizeximg_size
-                cropped_mean = cropped_mean.transpose(2, 0, 1)
-                image = np.array(
-                    image * 255. + cropped_mean,
-                    dtype=np.float32,
-                    order='C')
-                jitter(image, self.h_ch, self.s_ch, self.l_ch)
-                image = (image - cropped_mean) / 255.
+            if self.algo == 'icarl' or self.algo == 'lwf':
+                # Augment : Color jittering
+                if self.jitter:
+                    jitter(curr_img, self.h_ch, self.s_ch, self.l_ch)
+                    curr_img = (curr_img - curr_mean) / 255.
 
-            # Augment : Random crops and horizontal flips
-            random_cropped = np.zeros(image.shape, dtype=np.float32)
-            padded = np.pad(image, ((0, 0), (4, 4), (4, 4)), mode='constant')
-            crops = np.random.random_integers(0, high=8, size=(1, 2))
-            if (np.random.randint(2) > 0):
-                random_cropped[:, :, :] = padded[:, 
-                    crops[0, 0]:(crops[0, 0] + self.img_size), 
-                    crops[0, 1]:(crops[0, 1] + self.img_size)]
-            else:
-                random_cropped[:, :, :] = padded[:, 
-                    crops[0, 0]:(crops[0, 0] + self.img_size), 
-                    crops[0, 1]:(crops[0, 1] + self.img_size)][:, :, ::-1]
+                # Augment : Random crops and horizontal flips
+                random_cropped = np.zeros(curr_img.shape, dtype=np.float32)
+                padded = np.pad(curr_img, ((0, 0), (4, 4), (4, 4)), 
+                                mode='constant')
+                crops = np.random.random_integers(0, high=8, size=(1, 2))
+                if (np.random.randint(2) > 0):
+                    random_cropped[:, :, :] = padded[:, 
+                        crops[0, 0]:(crops[0, 0] + self.img_size), 
+                        crops[0, 1]:(crops[0, 1] + self.img_size)]
+                else:
+                    random_cropped[:, :, :] = padded[:, 
+                        crops[0, 0]:(crops[0, 0] + self.img_size), 
+                        crops[0, 1]:(crops[0, 1] + self.img_size)][:, :, ::-1]
 
-            image = torch.FloatTensor(random_cropped)
+                curr_img = torch.FloatTensor(random_cropped)
+            elif self.algo == 'e2e':
+                # Augment : 
+                # For 3 choices - original image, brightness augmented 
+                # and contrast augmented
+                rand_num = np.random.randint(0, 3)
+                if rand_num == 1:
+                    # brightness
+                    brightness = np.random.randint(-63, 64)
+                    curr_img = np.clip(curr_img + brightness, 0, 255)
+                elif rand_num == 2:
+                    # contrast
+                    # random from 0.2 to 1.8 inclusive
+                    contrast = np.random.random() * (1.6+1e-16) + 0.2  
+                    curr_img = np.clip((curr_img-curr_mean) * contrast 
+                                        + curr_mean, 0, 255)
+
+                curr_img = (curr_img - curr_mean)/255.
+                    
+                # Random choice whether to crop
+                rand_num = np.random.randint(0, 2)
+                if rand_num == 1:
+                    crops = np.random.random_integers(0, high=8, size=2)
+                    padded = np.pad(curr_img,((0,0),(4,4),(4,4)), 
+                                    mode='constant')
+                    curr_img = padded[:,
+                                      crops[0]:(crops[0]+self.img_size),
+                                      crops[1]:(crops[1]+self.img_size)] 
+
+                # Random choice whether to mirror horizontally
+                rand_num = np.random.randint(0, 2)
+                if rand_num == 1:
+                    curr_img = copy.deepcopy(curr_img[:, :, ::-1])
 
         elif self.job == 'test':
-            image = torch.FloatTensor(image)
+            curr_img = torch.FloatTensor((curr_img - curr_mean)/255.)
 
         target = self.datay[index]
 
-        return index, image, target
+        return index, curr_img, target
 
     def __len__(self):
         return self.curr_len
 
     def get_image_class(self, label):
         curr_data_y = self.datay[:self.curr_len]
-        return (self.datax[:self.curr_len][curr_data_y == label], 
+        return (self.datax[:self.curr_len][curr_data_y == label],
+                self.data_means[:self.curr_len][curr_data_y == label], 
                 self.dataz[:self.curr_len][curr_data_y ==label], 
                 self.bb[:self.curr_len][curr_data_y == label])
+
+    def clear(self):
+        self.curr_len = 0
 
     def append(self, images, labels, bb, dataunits):
         '''
@@ -113,6 +144,11 @@ class iToys(torch.utils.data.Dataset):
         self.datay[self.curr_len:self.curr_len + len(labels)] = labels
         self.bb[self.curr_len:self.curr_len + len(bb)] = bb
         self.dataz[self.curr_len:self.curr_len + len(dataunits)] = dataunits
+
+        # get new data_means
+        data_means = np.array([cv2.resize(self.mean_image[b[2]:b[3], b[0]:b[1]],\
+            (self.img_size, self.img_size)).transpose(2, 0, 1) for b in bb])
+        self.data_means[self.curr_len:self.curr_len+len(data_means)] = data_means
 
         self.curr_len += len(images)
 
@@ -128,22 +164,34 @@ class iToys(torch.utils.data.Dataset):
             if job == 'train':
                 data_generator = data_generators[i]
                 images, bboxes = data_generator.getDataUnit()
-            elif job == "test":
+            elif job == 'test':
                 data_generator = data_generators[i]
                 images, bboxes = data_generator.getRandomPoints()
             else:
                 raise Exception(
                     "Operation should be either 'test' or 'train'")
 
-            images = (images - self.mean_image) / \
-                255.  # 3 x rendered_img_size x rendered_img_size
+            # For E2E, get negatively labelled samples only in the
+            # first learning exposure
+            get_negatives = False
+            if self.job == 'train':
+                if (self.algo == 'icarl' or self.algo == 'lwf'
+                        or (self.algo == 'e2e' and du_idx == 0)):
+                    get_negatives = True
+
+
             [datax, datay, bb] = get_samples(
-                images, bboxes, cl, self.img_size, class_map, job)
+                images, bboxes, cl, self.img_size, class_map, get_negatives)
+
+            # store mean image for new class
+            data_means = np.array([cv2.resize(self.mean_image[b[2]:b[3], b[0]:b[1]], \
+                (self.img_size, self.img_size)).transpose(2, 0, 1) for b in bb])
 
             if self.curr_len + len(datax) > len(self.datax):
                 raise Exception("Dataset max length exceeded")
 
             self.datax[self.curr_len:self.curr_len + len(datax)] = datax
+            self.data_means[self.curr_len:self.curr_len+len(data_means)] = data_means
             self.datay[self.curr_len:self.curr_len + len(datay)] = datay
             self.bb[self.curr_len:self.curr_len + len(bb)] = bb
             self.dataz[self.curr_len:self.curr_len + len(datax), 0] = du_idx

@@ -1,32 +1,26 @@
-# NOTE : import orders are important
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.autograd import Variable
 import numpy as np
+import cv2
 from tqdm import tqdm
-import time
-
 import torchvision.models as models
-import torchvision.transforms as transforms
-
-from utils.loader_utils import CustomRandomSampler, CustomBatchSampler
-
-
-def kaiming_normal_init(m):
-    if isinstance(m, nn.Conv2d):
-        nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
-    elif isinstance(m, nn.Linear):
-        nn.init.kaiming_normal_(m.weight, nonlinearity='sigmoid')
-
+from utils.loader_utils import CustomRandomSampler
+from utils.loader_utils import CustomBatchSampler
+from utils.model_utils import kaiming_normal_init
+from utils.model_utils import MultiClassCrossEntropyLoss
 
 class IncrNet(nn.Module):
     def __init__(self, args, device):
         # Hyper Parameters
         self.init_lr = args.init_lr
+        self.init_lr_ft = args.init_lr_ft
         self.num_epoch = args.num_epoch
+        self.num_epoch_ft = args.num_epoch_ft
         self.batch_size = args.batch_size
         self.lr_dec_factor = args.lrd
+        self.llr_freq = args.llr_freq
         self.weight_decay = args.wd
         # Hardcoded
         self.lower_rate_epoch = [
@@ -43,15 +37,16 @@ class IncrNet(nn.Module):
         self.model = models.resnet34(pretrained=self.pretrained)
         if not self.pretrained:
             self.model.apply(kaiming_normal_init)
-
-        self.device = device
         feat_size = self.model.fc.in_features
         self.model.fc = nn.Linear(feat_size, 1, bias=False)
         self.fc = self.model.fc
         self.feature_extractor = nn.Sequential(
             *list(self.model.children())[:-1])
+        
+        # GPU device for the model
+        self.device = device
 
-        # n_classes incremented before processing new data in an iteration
+        # n_classes incremented before processing new data in an iteration.
         # n_known is set to n_classes after all data for a learning exposure
         # has been processed
         self.n_classes = 0
@@ -74,14 +69,22 @@ class IncrNet(nn.Module):
         self.eset_du_maps = []
         # store bounding boxes for all exemplars
         self.exemplar_bbs = []
-        # Means of exemplars
+        # Boolean to store whether exemplar means need to be recomputed
         self.compute_means = True
+        # Means of exemplars
         self.exemplar_means = []
 
-        # Loss functions
-        self.cls_loss = nn.BCELoss()
-        self.dist_loss = nn.BCELoss()
+        # Cross Entropy Loss functions
+        self.bce_loss = nn.BCELoss()
+        self.ce_loss = nn.CrossEntropyLoss()
 
+        # Temperature for cross entropy distillation loss
+        self.T = 2
+
+        # std for gradient noise adding
+        self.std = np.array([np.sqrt(0.3/(epoch+2)**0.55) 
+            for epoch in range(np.max([self.num_epoch, self.num_epoch_ft]))])
+        
     def forward(self, x):
         x = self.feature_extractor(x)
         x = x.view(x.size(0), -1)
@@ -113,12 +116,17 @@ class IncrNet(nn.Module):
             self.classes_map[cl] = self.n_known + i
             self.classes.append(cl)
 
-    def compute_exemplar_means(self):
+    def compute_exemplar_means(self, mean_image, img_size):
         '''
         Compute exemplar means from exemplar_sets
         '''
         exemplar_means = []
-        for P_y in self.exemplar_sets:
+        for y, P_y in enumerate(self.exemplar_sets):
+            # normalize images
+            bbs = self.exemplar_bbs[y]
+            data_means = np.array([cv2.resize(mean_image[b[2]:b[3], b[0]:b[1]],\
+                (img_size, img_size)).transpose(2, 0, 1) for b in bbs])
+            P_y = (np.float32(P_y) - data_means)/255.
 
             # Concatenate with horizontally flipped images
             all_imgs = np.concatenate((P_y, P_y[:, :, :, ::-1]), axis=0)
@@ -129,7 +137,8 @@ class IncrNet(nn.Module):
             for i in range(0, len(all_imgs), self.batch_size):
                 img_tensors = Variable(
                     torch.FloatTensor(
-                        all_imgs[i:min(i+self.batch_size, len(all_imgs))])).cuda(device=self.device)
+                        all_imgs[i:min(i+self.batch_size, len(all_imgs))]))\
+                            .cuda(device=self.device)
                 features = self.feature_extractor(img_tensors)
                 del img_tensors
 
@@ -153,7 +162,7 @@ class IncrNet(nn.Module):
         self.exemplar_means = exemplar_means
         self.compute_means = False
 
-    def classify(self, x):
+    def classify(self, x, mean_image, img_size):
         '''
         Classify images by nearest-mean-of-exemplars
         Args:
@@ -165,7 +174,7 @@ class IncrNet(nn.Module):
 
         if self.algo == 'icarl':
             if self.compute_means:
-                self.compute_exemplar_means()
+                self.compute_exemplar_means(mean_image, img_size)
 
             exemplar_means = self.exemplar_means
             means = torch.stack(exemplar_means).cuda(
@@ -193,18 +202,23 @@ class IncrNet(nn.Module):
             else:
                 _, preds = dists.min(1)
 
-        elif self.algo == 'hybrid1' or self.algo == 'lwf':
+        elif self.algo == 'lwf':
             sigmoids = torch.sigmoid(self.forward(x))
             _, preds = sigmoids.max(dim=1)
+        elif self.algo == 'e2e':
+            _, preds = torch.max(torch.softmax(self.forward(x), dim=1), 
+                                 dim=1, keepdim=False)
 
         return preds
 
-    def construct_exemplar_set(self, images, du_maps, 
-                               image_bbs, m, cl, curr_iter):
+    def construct_exemplar_set(self, images, image_means, du_maps, 
+                               image_bbs, m, cl, curr_iter, overwrite=False):
         '''
         Construct an exemplar set given images
         Args:
             images: np.array containing images of a class
+            image_means: cropped out parts of the dataset mean image for
+                         image patches
             du_maps: np.array containing data units and frame indices of images
             image_bbs: np.array containing image bounding boxes
             m: number of images in the exemplar set
@@ -215,11 +229,15 @@ class IncrNet(nn.Module):
         num_old_imgs = len(images) - num_new_imgs
         all_features = []
 
+        # Normalize images
+        normalized_images = (np.float32(images) - image_means)/255.
+
         # Batch up images so that not all needs to be fit on the GPU memory at once
         for i in range(0, len(images), self.batch_size):
             with torch.no_grad():
                 img_tensors = Variable(torch.FloatTensor(
-                    images[i:min(i+self.batch_size, len(images))])).cuda(device=self.device)
+                    normalized_images[i:min(i+self.batch_size, len(images))])
+                                       ).cuda(device=self.device)
 
             features = self.feature_extractor(img_tensors)
             del img_tensors
@@ -267,11 +285,12 @@ class IncrNet(nn.Module):
             indices_selected.append(indices_remaining[i])
             indices_remaining = np.delete(indices_remaining, i, axis=0)
 
-        if cl < self.n_known:
+        if cl < self.n_known or overwrite:
             self.exemplar_sets[cl] = np.array(images[indices_selected])
             self.eset_du_maps[cl] = np.array(du_maps[indices_selected])
             self.exemplar_bbs[cl] = np.array(image_bbs[indices_selected])
-            self.n_occurrences[cl] += 1
+            if not overwrite:
+                self.n_occurrences[cl] += 1
         else:
             self.exemplar_sets.append(np.array(images[indices_selected]))
             self.eset_du_maps.append(np.array(du_maps[indices_selected]))
@@ -301,13 +320,14 @@ class IncrNet(nn.Module):
                 'momentum': self.momentum,
                 'weight_decay': self.weight_decay}
 
-    def update_representation(self, dataset, prev_model, 
-                              curr_class_idxs, num_workers):
+    def update_representation_icarl(self, dataset, prev_model, 
+                                    curr_class_idxs, num_workers):
         '''
-        Update feature representation
+        Update feature representation for icarl/lwf
         Args:
             dataset: torch.utils.data.Dataset object, the dataset to train on
-            prev_model: model before backprop updates for obtaining distillation labels
+            prev_model: model before backprop updates for obtaining distillation 
+                        labels
             curr_class_idxs: indices in [0, self.n_known] of new classes.
                              also contains an index if its a repeated exposure 
                              to a class 
@@ -315,38 +335,38 @@ class IncrNet(nn.Module):
         '''
         torch.backends.cudnn.benchmark = True
         self.compute_means = True
-        self.lr = self.init_lr
+        lr = self.init_lr
 
         # Form combined training set
-        if self.algo == 'icarl' or self.algo == 'hybrid1':
+        if self.algo == 'icarl':
             self.combine_dataset_with_exemplars(dataset)
-
-        # NOTE : see if there are synchronization issues
+        
         sampler = CustomRandomSampler(dataset, self.num_epoch, num_workers)
         batch_sampler = CustomBatchSampler(
             sampler, self.batch_size, drop_last=False, epoch_size=len(dataset))
         num_batches_per_epoch = batch_sampler.num_batches_per_epoch
+        
         # Run network training
         loader = torch.utils.data.DataLoader(
             dataset, batch_sampler=batch_sampler, num_workers=num_workers, 
             pin_memory=True)
 
         print("Length of current data + exemplars : ", len(dataset))
-        optimizer = optim.SGD(self.parameters(), lr=self.lr,
+        optimizer = optim.SGD(self.parameters(), lr=lr,
                               momentum=self.momentum, 
                               weight_decay=self.weight_decay)
 
         q = Variable(torch.zeros(self.batch_size, self.n_classes)
                      ).cuda(device=self.device)
-        with tqdm(self.num_epoch) as pbar:
+        with tqdm(total=num_batches_per_epoch*self.num_epoch) as pbar:
             for i, (indices, images, labels) in enumerate(loader):
                 epoch = i//num_batches_per_epoch
 
                 if ((epoch+1) in self.lower_rate_epoch 
                         and i % num_batches_per_epoch == 0):
-                    self.lr = self.lr * 1.0/self.lr_dec_factor
+                    lr = lr * 1.0/self.lr_dec_factor
                     for param_group in optimizer.param_groups:
-                        param_group['lr'] = self.lr
+                        param_group['lr'] = lr
 
                 images = Variable(images).cuda(device=self.device)
 
@@ -359,6 +379,7 @@ class IncrNet(nn.Module):
                     labels = labels.cuda(device=self.device)
                     if self.n_known > 0:
                         # Store network outputs with pre-update parameters
+                        # for distillation
                         q_prev = torch.sigmoid(prev_model.forward(images))
                         q.data[:len(labels), :self.n_known] = q_prev.data[:, :self.n_known]
 
@@ -377,13 +398,133 @@ class IncrNet(nn.Module):
                     if len(pos_indices) > 0:
                         q[pos_indices, pos_labels] = 1
 
-                loss = self.cls_loss(g, q[:len(labels)])
+                loss = self.bce_loss(g, q[:len(labels)])
                 loss.backward()
                 optimizer.step()
 
-                if i%num_batches_per_epoch == 0:
-                    tqdm.write('Epoch [%d/%d], Iter [%d/%d] Loss: %.4f' 
-                               % (epoch, self.num_epoch, 
-                                  i % num_batches_per_epoch+1, 
-                                  num_batches_per_epoch, loss.data))
-                    pbar.update(1)
+                # TODO : test this
+                # if i%num_batches_per_epoch == 0:
+                tqdm.write('Epoch [%d/%d], Iter [%d/%d] Loss: %.4f' 
+                           % (epoch, self.num_epoch, 
+                              i % num_batches_per_epoch+1, 
+                              num_batches_per_epoch, loss.data))
+                pbar.update(1)
+
+
+    def update_representation_e2e(self, dataset, prev_model, 
+                                          num_workers, bft=False):
+        '''
+        Update feature representation for E2EIL
+        Args:
+            dataset: torch.utils.data.Dataset object, the dataset to train on
+            prev_model: model before backprop updates for obtaining distillation 
+                        labels
+            num_workers: number of data loader threads to use
+            bft: boolean indicating whether its the balanced finetuning stage
+                 of training
+        '''
+        torch.backends.cudnn.benchmark = True
+        self.compute_means = True
+        
+        if not bft:
+            num_epoch = self.num_epoch
+            lr = self.init_lr
+        else:
+            num_epoch = self.num_epoch_ft
+            lr = self.init_lr_ft
+
+
+        # Form combined training set
+        self.combine_dataset_with_exemplars(dataset)
+
+        sampler = CustomRandomSampler(dataset, num_epoch, num_workers)
+        batch_sampler = CustomBatchSampler(sampler, self.batch_size, 
+                                           drop_last=False, 
+                                           epoch_size=len(dataset))
+        num_batches_per_epoch = batch_sampler.num_batches_per_epoch
+        # Run network training
+        loader = torch.utils.data.DataLoader(dataset, 
+                                             batch_sampler=batch_sampler, 
+                                             num_workers=num_workers, 
+                                             pin_memory=True)
+
+        print("Length of current data + exemplars : ", len(dataset))
+        
+        optimizer = optim.SGD(self.parameters(), lr=lr, momentum=self.momentum, 
+                              weight_decay=self.weight_decay)
+        
+        with tqdm(total=num_batches_per_epoch*num_epoch) as pbar:
+            for i, (indices, images, labels) in enumerate(loader):
+                epoch = i//num_batches_per_epoch
+                if ((epoch+1) % self.llr_freq == 0 
+                        and i % num_batches_per_epoch == 0):
+                    tqdm.write('Lowering Learning rate at epoch %d' %
+                               (epoch+1))
+                    lr = lr * 1.0/self.lr_dec_factor
+                    for param_group in optimizer.param_groups:
+                        param_group['lr'] = lr
+
+                images = Variable(images).cuda(device=self.device)
+                labels = Variable(labels).cuda(device=self.device)
+
+                optimizer.zero_grad()
+
+                logits = self.forward(images)
+
+                # Get classification loss
+                # if n_classes = 1, classification loss is BCE
+                if self.n_classes == 1:
+                    logits = torch.sigmoid(logits)
+                    q = Variable(torch.zeros(len(images), 
+                                             self.n_classes)
+                                ).cuda(device=self.device)
+
+                    pos_labels = labels
+                    pos_indices = torch.arange(0, logits.data.shape[0],
+                                               out=torch.LongTensor()
+                                               ).cuda(device=self.device)[pos_labels != -1]
+                    pos_labels = pos_labels[pos_labels != -1]
+
+                    if len(pos_indices) > 0:
+                        q[pos_indices, pos_labels] = 1
+                    cls_loss = self.bce_loss(logits, q) 
+                    del q
+                else:
+                    cls_loss = self.ce_loss(logits, labels)
+                
+                # Get distillation loss
+                if self.dist and (bft or self.n_classes > 1):
+                    logits_dist = logits[:, :self.n_known]
+                    dist_target = prev_model.forward(images)
+
+                    if logits_dist.shape[1] == 1:
+                        logits_dist = torch.sigmoid(logits_dist)
+                        dist_target = torch.sigmoid(dist_target)
+                        dist_loss = self.bce_loss(logits_dist, 
+                                                  Variable(dist_target.data,
+                                                           requires_grad=False
+                                                           ).cuda(device=self.device))
+                    else:
+                        dist_loss = MultiClassCrossEntropyLoss(
+                            logits_dist, dist_target, self.T, device=self.device)
+                else:
+                    # No distillation loss
+                    dist_loss = 0
+
+                loss = dist_loss*self.T*self.T + cls_loss
+                
+                loss.backward(retain_graph=True)
+                # get the grads for each layer (dL/dW)
+                grads = torch.autograd.grad(loss, self.parameters())
+                # add noise to the grads
+                # dL/dW += N(0, std_e)
+                for p in grads:
+                    p.data.add_(torch.cuda.FloatTensor(
+                        p.shape, device=self.device).normal_(std=self.std[epoch]))
+
+                optimizer.step()
+                tqdm.write('Epoch [%d/%d], Iter [%d/%d] Loss: %.4f'
+                           % ((epoch+1), num_epoch, i % num_batches_per_epoch+1, 
+                              num_batches_per_epoch, loss.data))
+
+                pbar.update(1)
