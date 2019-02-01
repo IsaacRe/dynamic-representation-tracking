@@ -41,12 +41,12 @@ class DataGenerator(object):
                     self.n_exposures, self.total_exposures)
         print(outStr)
 
-    def getDataUnit(self):
+    def getLearningExposure(self):
         '''
-        Returns a data unit of length n_frames of RGB images, 
+        Returns a learning exposure of n_frames frames of RGB images, 
         their respective bounding boxes and the percentage covered
         '''
-        images, bboxes = self.get_img_bboxes('data_unit')
+        images, bboxes = self.get_img_bboxes('learning_exposure')
         self.n_exposures += 1
         return images, bboxes
 
@@ -61,7 +61,7 @@ class DataGenerator(object):
 
         if kind == 'random':
             amount = self.size_test
-        elif kind == 'data_unit':
+        elif kind == 'learning_exposure':
             amount = self.n_frames
 
         images = np.zeros((self.n_frames, self.resolution, self.resolution, 3))
@@ -75,7 +75,7 @@ class DataGenerator(object):
 
         if kind == 'random':
             bboxes = self.test_bboxes
-        elif kind == 'data_unit':
+        elif kind == 'learning_exposure':
             bboxes = self.bboxes[self.n_exposures]
 
         return (images, bboxes.astype(np.int32))
@@ -85,7 +85,7 @@ class DataGenerator(object):
         if kind == 'random':
             im_filepath = 'test_data/' + self.model_name + \
                 '/' + ('%04d' % frame) + '.png'
-        elif kind == 'data_unit':
+        elif kind == 'learning_exposure':
             im_filepath = 'render_data/' + self.model_name + '/' + \
                 str(self.n_exposures) + '/' + ('%04d' % frame) + '.png'
 

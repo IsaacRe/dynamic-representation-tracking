@@ -65,8 +65,8 @@ class IncrNet(nn.Module):
         # H = image height
         # W = image width
         self.exemplar_sets = []
-        # for each exemplar store which data unit it came from
-        self.eset_du_maps = []
+        # for each exemplar store which learning exposure it came from
+        self.eset_le_maps = []
         # store bounding boxes for all exemplars
         self.exemplar_bbs = []
         # Boolean to store whether exemplar means need to be recomputed
@@ -211,7 +211,7 @@ class IncrNet(nn.Module):
 
         return preds
 
-    def construct_exemplar_set(self, images, image_means, du_maps, 
+    def construct_exemplar_set(self, images, image_means, le_maps, 
                                image_bbs, m, cl, curr_iter, overwrite=False):
         '''
         Construct an exemplar set given images
@@ -219,13 +219,14 @@ class IncrNet(nn.Module):
             images: np.array containing images of a class
             image_means: cropped out parts of the dataset mean image for
                          image patches
-            du_maps: np.array containing data units and frame indices of images
+            le_maps: np.array containing learning exposure indices and 
+                     frame indices within them of images
             image_bbs: np.array containing image bounding boxes
             m: number of images in the exemplar set
             cl: class index in self.classes of the current exemplar set
             curr_iter: learning exposure index
         '''
-        num_new_imgs = np.sum(du_maps[:, 0] == curr_iter)
+        num_new_imgs = np.sum(le_maps[:, 0] == curr_iter)
         num_old_imgs = len(images) - num_new_imgs
         all_features = []
 
@@ -255,9 +256,9 @@ class IncrNet(nn.Module):
         features = np.concatenate(all_features, axis=0)
 
         weights = np.zeros((len(features), 1))
-        weights[du_maps[:, 0] == curr_iter] = float(
+        weights[le_maps[:, 0] == curr_iter] = float(
             num_old_imgs + 1)/(num_old_imgs + num_new_imgs + 1)
-        weights[du_maps[:, 0] != curr_iter] = float(
+        weights[le_maps[:, 0] != curr_iter] = float(
             num_new_imgs + 1)/(num_old_imgs + num_new_imgs + 1)
 
         class_mean = np.sum(weights * features, axis=0)/np.sum(weights)
@@ -287,20 +288,20 @@ class IncrNet(nn.Module):
 
         if cl < self.n_known or overwrite:
             self.exemplar_sets[cl] = np.array(images[indices_selected])
-            self.eset_du_maps[cl] = np.array(du_maps[indices_selected])
+            self.eset_le_maps[cl] = np.array(le_maps[indices_selected])
             self.exemplar_bbs[cl] = np.array(image_bbs[indices_selected])
             if not overwrite:
                 self.n_occurrences[cl] += 1
         else:
             self.exemplar_sets.append(np.array(images[indices_selected]))
-            self.eset_du_maps.append(np.array(du_maps[indices_selected]))
+            self.eset_le_maps.append(np.array(le_maps[indices_selected]))
             self.exemplar_bbs.append(np.array(image_bbs[indices_selected]))
             self.n_occurrences.append(1)
 
     def reduce_exemplar_sets(self, m):
         for y, P_y in enumerate(self.exemplar_sets):
             self.exemplar_sets[y] = P_y[:m]
-            self.eset_du_maps[y] = self.eset_du_maps[y][:m]
+            self.eset_le_maps[y] = self.eset_le_maps[y][:m]
             self.exemplar_bbs[y] = self.exemplar_bbs[y][:m]
 
     def combine_dataset_with_exemplars(self, dataset):
@@ -308,7 +309,7 @@ class IncrNet(nn.Module):
             exemplar_images = P_y
             exemplar_labels = [y] * len(P_y)
             dataset.append(exemplar_images, exemplar_labels,
-                           self.exemplar_bbs[y], self.eset_du_maps[y])
+                           self.exemplar_bbs[y], self.eset_le_maps[y])
 
     def fetch_hyper_params(self):
         return {'num_epoch': self.num_epoch,

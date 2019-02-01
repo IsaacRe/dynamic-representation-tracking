@@ -10,7 +10,7 @@ from utils.get_samples import get_samples
 
 class iToys(torch.utils.data.Dataset):
     def __init__(self, args, mean_image, data_generators, max_data_size,
-                 classes=None, class_map=None, job=None, du_idx=-1):
+                 classes=None, class_map=None, job=None, le_idx=-1):
         self.job = job
         self.algo = args.algo
         self.jitter = args.jitter
@@ -34,24 +34,24 @@ class iToys(torch.utils.data.Dataset):
         # 3 x rendered_img_size x rendered_img_size
         self.mean_image = mean_image
 
-        # Data z stores which dataunit an image comes from and its frame index,
-        # populated only when job=='train'
+        # Data z stores which learning exposure an image comes from 
+        # and its frame index; populated only when job=='train'
         self.dataz = np.empty((max_data_size, 2), dtype=int)
 
         # Can also initialize an empty set and expand later
         if len(data_generators) > 0:
             assert len(data_generators) == len(classes), \
                 'Number of datagenerators and classes passed is different'
-            self.expand(args, data_generators, classes, class_map, job, du_idx)
+            self.expand(args, data_generators, classes, class_map, job, le_idx)
 
     # To allow using the same memory locations for datax
     def pseudo_init(self, args, data_generators, classes=None,
-                    class_map=None, job=None, du_idx=-1):
+                    class_map=None, job=None, le_idx=-1):
         self.curr_len = 0
         if len(data_generators) > 0:
             assert len(data_generators) == len(classes), \
                 'Number of datagenerators and classes passed is different'
-            self.expand(args, data_generators, classes, class_map, job, du_idx)
+            self.expand(args, data_generators, classes, class_map, job, le_idx)
 
     def __getitem__(self, index):
         curr_img = np.float32(self.datax[index])
@@ -133,7 +133,7 @@ class iToys(torch.utils.data.Dataset):
     def clear(self):
         self.curr_len = 0
 
-    def append(self, images, labels, bb, dataunits):
+    def append(self, images, labels, bb, frame_data):
         '''
         Append dataset with images, labels, and other metadata
         '''
@@ -143,7 +143,7 @@ class iToys(torch.utils.data.Dataset):
         self.datax[self.curr_len:self.curr_len + len(images)] = images
         self.datay[self.curr_len:self.curr_len + len(labels)] = labels
         self.bb[self.curr_len:self.curr_len + len(bb)] = bb
-        self.dataz[self.curr_len:self.curr_len + len(dataunits)] = dataunits
+        self.dataz[self.curr_len:self.curr_len + len(frame_data)] = frame_data
 
         # get new data_means
         data_means = np.array([cv2.resize(self.mean_image[b[2]:b[3], b[0]:b[1]],\
@@ -153,17 +153,17 @@ class iToys(torch.utils.data.Dataset):
         self.curr_len += len(images)
 
     def expand(self, args, data_generators,
-               classes, class_map, job, du_idx=-1):
+               classes, class_map, job, le_idx=-1):
         '''
         Call data generator to get images and append to dataset
         '''
         if job == 'train':
-            assert du_idx >= 0, 'Needs to have positive learning exposure index'
+            assert le_idx >= 0, 'Needs to have positive learning exposure index'
 
         for i, cl in enumerate(classes):
             if job == 'train':
                 data_generator = data_generators[i]
-                images, bboxes = data_generator.getDataUnit()
+                images, bboxes = data_generator.getLearningExposure()
             elif job == 'test':
                 data_generator = data_generators[i]
                 images, bboxes = data_generator.getRandomPoints()
@@ -176,7 +176,7 @@ class iToys(torch.utils.data.Dataset):
             get_negatives = False
             if self.job == 'train':
                 if (self.algo == 'icarl' or self.algo == 'lwf'
-                        or (self.algo == 'e2e' and du_idx == 0)):
+                        or (self.algo == 'e2e' and le_idx == 0)):
                     get_negatives = True
 
 
@@ -194,7 +194,7 @@ class iToys(torch.utils.data.Dataset):
             self.data_means[self.curr_len:self.curr_len+len(data_means)] = data_means
             self.datay[self.curr_len:self.curr_len + len(datay)] = datay
             self.bb[self.curr_len:self.curr_len + len(bb)] = bb
-            self.dataz[self.curr_len:self.curr_len + len(datax), 0] = du_idx
+            self.dataz[self.curr_len:self.curr_len + len(datax), 0] = le_idx
             
             # numbering the frames that come in. Each +ve frame is followed 
             # by a -ve background image

@@ -52,8 +52,8 @@ parser.add_argument('--batch_size_test', default=200, type=int,
                     help='Mini batch size for testing')
 
 # CRIB options
-parser.add_argument('--dunit_length', default=100, type=int,
-                    help='Dataunit length')
+parser.add_argument('--lexp_len', default=100, type=int,
+                    help='Number of frames in Learning Exposure')
 parser.add_argument('--size_test', default=100, type=int,
                     help='Number of test images per object')
 parser.add_argument('--num_exemplars', default=600, type=int,
@@ -164,7 +164,7 @@ mean_image = cv2.resize(
 mean_image = np.uint8(mean_image)
 
 # To pass to dataloaders for preallocation
-max_train_data_size = 2 * args.dunit_length + args.num_exemplars
+max_train_data_size = 2 * args.lexp_len + args.num_exemplars
 max_test_data_size = args.total_classes * args.size_test
 
 # Initialize CNN
@@ -183,7 +183,7 @@ acc_matr = np.zeros((args.total_classes, args.num_iters))
 
 # All object data generators
 data_generators = [DataGenerator(model_name=classes[i], 
-                                 n_frames=args.dunit_length,
+                                 n_frames=args.lexp_len,
                                  size_test=args.size_test, 
                                  resolution=args.rendered_img_size) 
                    for i in range(args.total_classes)]
@@ -307,11 +307,11 @@ def train_run(device):
                               [data_generators[curr_class_idx]], 
                               max_train_data_size, 
                               [curr_class], model.classes_map, 
-                              'train', du_idx=s)
+                              'train', le_idx=s)
         else:
             train_set.pseudo_init(args, [data_generators[curr_class_idx]], 
                                   [curr_class], model.classes_map, 'train', 
-                                  du_idx=s)
+                                  le_idx=s)
 
         model.train()
         if args.algo == 'icarl' or args.algo == 'lwf':
@@ -337,9 +337,9 @@ def train_run(device):
             print('Constructing exemplar set for class index %d , %s ...' %
                   (model_curr_class_idx, curr_class), end="")
 
-            images, image_means, du_maps, image_bbs = train_set.get_image_class(
+            images, image_means, le_maps, image_bbs = train_set.get_image_class(
                 model_curr_class_idx)
-            model.construct_exemplar_set(images, image_means, du_maps, 
+            model.construct_exemplar_set(images, image_means, le_maps, 
                                          image_bbs, m, model_curr_class_idx, s)
             print("Done")
 
@@ -365,9 +365,9 @@ def train_run(device):
             print('Constructing exemplar set for class index %d , %s ...' %
                   (model_curr_class_idx, curr_class), end="")
 
-            images, image_means, du_maps, image_bbs = train_set.get_image_class(
+            images, image_means, le_maps, image_bbs = train_set.get_image_class(
                 model_curr_class_idx)
-            model.construct_exemplar_set(images, image_means, du_maps, 
+            model.construct_exemplar_set(images, image_means, le_maps, 
                                          image_bbs, m, model_curr_class_idx, s)
             print("Done")
 
@@ -379,7 +379,7 @@ def train_run(device):
             for y, P_y in enumerate(model.exemplar_sets):
                 print("Exemplar set for class-%d:" % (y), P_y.shape)
 
-            exemplar_data.append(list(model.eset_du_maps))
+            exemplar_data.append(list(model.eset_le_maps))
 
 
         cond_var.acquire()
