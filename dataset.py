@@ -24,19 +24,17 @@ class iToys(torch.utils.data.Dataset):
         self.data_means = np.empty((max_data_size, 3, 
                                     self.img_size, self.img_size), 
                                     dtype=np.uint8)
-
         self.datay = np.empty(max_data_size, dtype=int)
         self.bb = np.empty((max_data_size, 4), dtype=int)
+        # Data z stores which learning exposure an image comes from 
+        # and its frame index; populated only when job=='train'
+        self.dataz = np.empty((max_data_size, 2), dtype=int)
         self.curr_len = 0
 
         self.h_ch, self.s_ch, self.l_ch = args.h_ch, args.s_ch, args.l_ch
 
         # 3 x rendered_img_size x rendered_img_size
         self.mean_image = mean_image
-
-        # Data z stores which learning exposure an image comes from 
-        # and its frame index; populated only when job=='train'
-        self.dataz = np.empty((max_data_size, 2), dtype=int)
 
         # Can also initialize an empty set and expand later
         if len(data_generators) > 0:
@@ -146,7 +144,7 @@ class iToys(torch.utils.data.Dataset):
         self.dataz[self.curr_len:self.curr_len + len(frame_data)] = frame_data
 
         # get new data_means
-        data_means = np.array([cv2.resize(self.mean_image[b[2]:b[3], b[0]:b[1]],\
+        data_means = np.array([cv2.resize(self.mean_image[b[2]:b[3], b[0]:b[1]],
             (self.img_size, self.img_size)).transpose(2, 0, 1) for b in bb])
         self.data_means[self.curr_len:self.curr_len+len(data_means)] = data_means
 
@@ -179,12 +177,11 @@ class iToys(torch.utils.data.Dataset):
                         or (self.algo == 'e2e' and le_idx == 0)):
                     get_negatives = True
 
-
             [datax, datay, bb] = get_samples(
                 images, bboxes, cl, self.img_size, class_map, get_negatives)
 
             # store mean image for new class
-            data_means = np.array([cv2.resize(self.mean_image[b[2]:b[3], b[0]:b[1]], \
+            data_means = np.array([cv2.resize(self.mean_image[b[2]:b[3], b[0]:b[1]],
                 (self.img_size, self.img_size)).transpose(2, 0, 1) for b in bb])
 
             if self.curr_len + len(datax) > len(self.datax):
@@ -197,8 +194,11 @@ class iToys(torch.utils.data.Dataset):
             self.dataz[self.curr_len:self.curr_len + len(datax), 0] = le_idx
             
             # numbering the frames that come in. Each +ve frame is followed 
-            # by a -ve background image
-            # TODO: change if no negative images are passed (use args.algo)
-            self.dataz[self.curr_len:self.curr_len +
-                       len(datax), 1] = np.arange(len(datax)) // 2
+            # by a -ve background image when get_negatives is True
+            if get_negatives:
+                self.dataz[self.curr_len:self.curr_len +
+                           len(datax), 1] = np.arange(len(datax)) // 2
+            else:
+                self.dataz[self.curr_len:self.curr_len +
+                           len(datax), 1] = np.arange(len(datax))
             self.curr_len += len(datax)

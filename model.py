@@ -225,6 +225,9 @@ class IncrNet(nn.Module):
             m: number of images in the exemplar set
             cl: class index in self.classes of the current exemplar set
             curr_iter: learning exposure index
+            overwrite: Boolean to keep track of whether the exemplar set is 
+                       being constructed after finetuning (not a repeated 
+                       exposure) 
         '''
         num_new_imgs = np.sum(le_maps[:, 0] == curr_iter)
         num_old_imgs = len(images) - num_new_imgs
@@ -476,18 +479,11 @@ class IncrNet(nn.Module):
                 # if n_classes = 1, classification loss is BCE
                 if self.n_classes == 1:
                     logits = torch.sigmoid(logits)
-                    q = Variable(torch.zeros(len(images), 
-                                             self.n_classes)
+                    # q of shape (batch_size, 1) same as logits
+                    q = Variable(torch.zeros(len(images), 1)
                                 ).cuda(device=self.device)
-
-                    pos_labels = labels
-                    pos_indices = torch.arange(0, logits.data.shape[0],
-                                               out=torch.LongTensor()
-                                               ).cuda(device=self.device)[pos_labels != -1]
-                    pos_labels = pos_labels[pos_labels != -1]
-
-                    if len(pos_indices) > 0:
-                        q[pos_indices, pos_labels] = 1
+                    if torch.any(labels!=-1):
+                        q[labels != -1, 0] = 1
                     cls_loss = self.bce_loss(logits, q) 
                     del q
                 else:

@@ -176,7 +176,7 @@ class_map = {cl_name: idx for idx,
              cl_name in enumerate(all_classes.all_classes)}
 classes_seen = []
 model_classes_seen = []  # Class index numbers stored by model
-exemplar_data = []  # Exemplar set information, more in model
+exemplar_data = []  # Exemplar set information stored by the model
 # acc_matr row index represents class number and column index represents
 # learning exposure.
 acc_matr = np.zeros((args.total_classes, args.num_iters))
@@ -260,7 +260,6 @@ def train_run(device):
     s = len(classes_seen)
     print('####### Train Process Running ########')
     print('Args: ', args)
-    print('Model hyper params: ', model.fetch_hyper_params())
     train_wait_time = 0
 
     while s < args.num_iters:
@@ -342,7 +341,7 @@ def train_run(device):
             model.construct_exemplar_set(images, image_means, le_maps, 
                                          image_bbs, m, model_curr_class_idx, s)
             print("Done")
-
+        
 
         model.n_known = model.n_classes
 
@@ -361,14 +360,13 @@ def train_run(device):
                                             args.num_workers,
                                             bft=True)
             model.eval()
+            del prev_model
 
             print('Constructing exemplar set for class index %d , %s ...' %
                   (model_curr_class_idx, curr_class), end="")
-
-            images, image_means, le_maps, image_bbs = train_set.get_image_class(
-                model_curr_class_idx)
             model.construct_exemplar_set(images, image_means, le_maps, 
-                                         image_bbs, m, model_curr_class_idx, s)
+                                         image_bbs, m, model_curr_class_idx, 
+                                         s, overwrite=True)
             print("Done")
 
 
