@@ -93,7 +93,8 @@ class IncrNet(nn.Module):
 
     def increment_classes(self, new_classes):
         '''
-        Make network changes when new classes are seen
+        Add new output nodes when new classes are seen and make changes to
+        model data members
         '''
         n = len(new_classes)
         in_features = self.fc.in_features
@@ -135,6 +136,7 @@ class IncrNet(nn.Module):
             # Batch up all_imgs to fit on the GPU
             # all_features on GPU
             for i in range(0, len(all_imgs), self.batch_size):
+                # Extract image features
                 img_tensors = Variable(
                     torch.FloatTensor(
                         all_imgs[i:min(i+self.batch_size, len(all_imgs))]))\
@@ -142,7 +144,7 @@ class IncrNet(nn.Module):
                 features = self.feature_extractor(img_tensors)
                 del img_tensors
 
-                # Normalize along dimension 1
+                # Normalize features
                 features_norm = features.data.norm(p=2, dim=1) + self.epsilon
                 features_norm = features_norm.unsqueeze(1)
                 features.data = features.data.div(
@@ -150,8 +152,8 @@ class IncrNet(nn.Module):
 
                 all_features.append(features)
 
+            # compute mean feature vector and renormalize
             features = torch.cat(all_features)
-
             mu_y = features.mean(dim=0).squeeze().detach()
             mu_y.data = mu_y.data / \
                 (mu_y.data.norm() + self.epsilon)  # Normalize
@@ -164,7 +166,6 @@ class IncrNet(nn.Module):
 
     def classify(self, x, mean_image, img_size):
         '''
-        Classify images by nearest-mean-of-exemplars
         Args:
             x: input images
         Returns:
@@ -176,6 +177,8 @@ class IncrNet(nn.Module):
             if self.compute_means:
                 self.compute_exemplar_means(mean_image, img_size)
 
+            # Expand means to compute distance to each mean 
+            # for each feature vector
             exemplar_means = self.exemplar_means
             means = torch.stack(exemplar_means).cuda(
                 device=self.device)  # (n_classes, feature_size)
@@ -184,6 +187,7 @@ class IncrNet(nn.Module):
             # (batch_size, feature_size, n_classes)
             means = means.transpose(1, 2)
 
+            # Expand features to find distance from each mean
             feature = self.feature_extractor(x)  # (batch_size, feature_size)
             feature_norm = feature.data.norm(p=2, dim=1) + self.epsilon
             feature_norm = feature_norm.unsqueeze(1)
@@ -200,11 +204,13 @@ class IncrNet(nn.Module):
                     np.zeros(dists.data.shape, 
                              dtype=np.int64)).cuda(device=self.device))
             else:
+                # predict class based on closest exemplar mean
                 _, preds = dists.min(1)
 
         elif self.algo == 'lwf':
             sigmoids = torch.sigmoid(self.forward(x))
             _, preds = sigmoids.max(dim=1)
+        
         elif self.algo == 'e2e':
             _, preds = torch.max(torch.softmax(self.forward(x), dim=1), 
                                  dim=1, keepdim=False)
@@ -243,9 +249,11 @@ class IncrNet(nn.Module):
                     normalized_images[i:min(i+self.batch_size, len(images))])
                                        ).cuda(device=self.device)
 
+            # Get features
             features = self.feature_extractor(img_tensors)
             del img_tensors
-            # Normalize along dimension 1
+            
+            # Normalize features
             features_norm = features.data.norm(p=2, dim=1) + self.epsilon
             features_norm = features_norm.unsqueeze(1)
             features.data = features.data.div(
@@ -258,6 +266,10 @@ class IncrNet(nn.Module):
 
         features = np.concatenate(all_features, axis=0)
 
+        # Weight of images for computing mean while herding
+        # New (images from new learning exposure) and 
+        # old images (from old exemplars) are weighed 
+        # in the inverse ratio of their numbers 
         weights = np.zeros((len(features), 1))
         weights[le_maps[:, 0] == curr_iter] = float(
             num_old_imgs + 1)/(num_old_imgs + num_new_imgs + 1)
@@ -271,6 +283,8 @@ class IncrNet(nn.Module):
         indices_remaining = np.arange(0, len(images))
         indices_selected = []
 
+        # Herding procedure : Algorithm 4 in 
+        # https://arxiv.org/pdf/1611.07725.pdf (Rebuffi et al.)
         for k in range(m):
             if len(indices_remaining) == 0:
                 break
@@ -290,24 +304,33 @@ class IncrNet(nn.Module):
             indices_remaining = np.delete(indices_remaining, i, axis=0)
 
         if cl < self.n_known or overwrite:
+            # Repeated exposure, or balanced finetuning for E2EIL
             self.exemplar_sets[cl] = np.array(images[indices_selected])
             self.eset_le_maps[cl] = np.array(le_maps[indices_selected])
             self.exemplar_bbs[cl] = np.array(image_bbs[indices_selected])
             if not overwrite:
                 self.n_occurrences[cl] += 1
         else:
+            # New object exemplar set to be created
             self.exemplar_sets.append(np.array(images[indices_selected]))
             self.eset_le_maps.append(np.array(le_maps[indices_selected]))
             self.exemplar_bbs.append(np.array(image_bbs[indices_selected]))
             self.n_occurrences.append(1)
 
     def reduce_exemplar_sets(self, m):
+        '''
+        Shrink each exemplar set to size m, keeping only the 
+        top m ranked by herding
+        '''
         for y, P_y in enumerate(self.exemplar_sets):
             self.exemplar_sets[y] = P_y[:m]
             self.eset_le_maps[y] = self.eset_le_maps[y][:m]
             self.exemplar_bbs[y] = self.exemplar_bbs[y][:m]
 
     def combine_dataset_with_exemplars(self, dataset):
+        '''
+        Add exemplars to dataset for training
+        '''
         for y, P_y in enumerate(self.exemplar_sets):
             exemplar_images = P_y
             exemplar_labels = [y] * len(P_y)
@@ -360,6 +383,7 @@ class IncrNet(nn.Module):
                               momentum=self.momentum, 
                               weight_decay=self.weight_decay)
 
+        # label matrix
         q = Variable(torch.zeros(self.batch_size, self.n_classes)
                      ).cuda(device=self.device)
         with tqdm(total=num_batches_per_epoch*self.num_epoch) as pbar:
@@ -406,9 +430,7 @@ class IncrNet(nn.Module):
                 loss.backward()
                 optimizer.step()
 
-                # TODO : test this
-                # if i%num_batches_per_epoch == 0:
-                tqdm.write('Epoch [%d/%d], Iter [%d/%d] Loss: %.4f' 
+                tqdm.write('Epoch [%d/%d], Minibatch [%d/%d] Loss: %.4f' 
                            % (epoch, self.num_epoch, 
                               i % num_batches_per_epoch+1, 
                               num_batches_per_epoch, loss.data))
@@ -519,14 +541,8 @@ class IncrNet(nn.Module):
                         p.shape, device=self.device).normal_(std=self.std[epoch]))
 
                 optimizer.step()
-                if not self.dist or (self.n_classes == 1 and not bft):
-                    tqdm.write('Epoch [%d/%d], Iter [%d/%d] Loss: %.4f cls_loss: %.4f' 
-                           %((epoch+1), num_epoch, i%num_batches_per_epoch+1, num_batches_per_epoch, loss.data, cls_loss.data))
-                else:
-                    tqdm.write('Epoch [%d/%d], Iter [%d/%d] Loss: %.4f cls_loss: %.4f dist_loss: %.4f' 
-                           %((epoch+1), num_epoch, i%num_batches_per_epoch+1, num_batches_per_epoch, loss.data, cls_loss.data, dist_loss.data))
-                # tqdm.write('Epoch [%d/%d], Iter [%d/%d] Loss: %.4f'
-                #            % ((epoch+1), num_epoch, i % num_batches_per_epoch+1, 
-                #               num_batches_per_epoch, loss.data))
+                tqdm.write('Epoch [%d/%d], Minibatch [%d/%d] Loss: %.4f'
+                           % ((epoch+1), num_epoch, i % num_batches_per_epoch+1, 
+                              num_batches_per_epoch, loss.data))
 
                 pbar.update(1)

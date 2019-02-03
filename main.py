@@ -271,7 +271,6 @@ def train_run(device):
             print('[Train Process] Waiting on test process')
             print('[Train Process] train_counter : ', train_counter.value)
             print('[Train Process] test_counter : ', test_counter.value)
-            print('[Train Process] Model n_classes : ', model.n_classes)
             cond_var.wait()
         cond_var.release()
         train_wait_time += time.time() - time_ptr
@@ -340,7 +339,6 @@ def train_run(device):
                 model_curr_class_idx)
             model.construct_exemplar_set(images, image_means, le_maps, 
                                          image_bbs, m, model_curr_class_idx, s)
-            print("Done")
         
 
         model.n_known = model.n_classes
@@ -367,12 +365,10 @@ def train_run(device):
             model.construct_exemplar_set(images, image_means, le_maps, 
                                          image_bbs, m, model_curr_class_idx, 
                                          s, overwrite=True)
-            print("Done")
 
 
         print("Model num classes : %d, " % model.n_known)
-        print("Model classes : ", model.classes)
-
+        
         if args.algo == 'icarl' or args.algo == 'e2e':
             for y, P_y in enumerate(model.exemplar_sets):
                 print("Exemplar set for class-%d:" % (y), P_y.shape)
@@ -387,7 +383,6 @@ def train_run(device):
         else:
             expanded_classes[s % args.test_freq] = None
 
-        print('[Train Process] expanded_classes : ', expanded_classes)
         if train_counter.value == test_counter.value + args.test_freq:
             temp_model = copy.deepcopy(model)
             temp_model.cpu()
@@ -429,9 +424,6 @@ def test_run(device):
                 print('[Test Process] Waiting on train process')
                 print('[Test Process] train_counter : ', train_counter.value)
                 print('[Test Process] test_counter : ', test_counter.value)
-                if test_model is not None:
-                    print('[Test Process] test_model n_classes : ',
-                          test_model.n_classes)
                 cond_var.wait()
             cond_var.release()
             test_wait_time += time.time() - time_ptr
@@ -488,8 +480,6 @@ def test_run(device):
 
             test_acc = np.mean(acc_matr[:test_model.n_known, s])
             print('%.2f ,' % test_acc, file=file)
-            print("[Test Process] Accuracy matrix: \n", acc_matr[:min(
-                test_model.n_known, 10), :min(s + args.test_freq, 10)])
             print("[Test Process] Test Accuracy after %d iterations : " %
                   (s + args.test_freq), test_acc)
 
