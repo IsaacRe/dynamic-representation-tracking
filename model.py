@@ -236,7 +236,7 @@ class IncrNet(nn.Module):
         # Normalize images
         normalized_images = (np.float32(images) - image_means)/255.
 
-        # Batch up images so that not all needs to be fit on the GPU memory at once
+        # Batch up images to fit on GPU memory
         for i in range(0, len(images), self.batch_size):
             with torch.no_grad():
                 img_tensors = Variable(torch.FloatTensor(
@@ -388,10 +388,10 @@ class IncrNet(nn.Module):
                         q.data[:len(labels), :self.n_known] = q_prev.data[:, :self.n_known]
 
                     # For new classes use label 1
-                    for new_class_idx in curr_class_idxs:
-                        q.data[:len(labels), new_class_idx] = 0
-                        q.data[:len(labels), new_class_idx].masked_fill_(
-                            labels == new_class_idx, 1)
+                    for curr_class_idx in curr_class_idxs:
+                        q.data[:len(labels), curr_class_idx] = 0
+                        q.data[:len(labels), curr_class_idx].masked_fill_(
+                            labels == curr_class_idx, 1)
                 else:
                     labels = labels.cuda(device=self.device)
                     pos_labels = labels
@@ -416,7 +416,7 @@ class IncrNet(nn.Module):
 
 
     def update_representation_e2e(self, dataset, prev_model, 
-                                          num_workers, bft=False):
+                                  num_workers, bft=False):
         '''
         Update feature representation for E2EIL
         Args:
@@ -425,7 +425,6 @@ class IncrNet(nn.Module):
                         labels
             num_workers: number of data loader threads to use
             bft: boolean indicating whether its the balanced finetuning stage
-                 of training
         '''
         torch.backends.cudnn.benchmark = True
         self.compute_means = True
@@ -488,6 +487,7 @@ class IncrNet(nn.Module):
                     del q
                 else:
                     cls_loss = self.ce_loss(logits, labels)
+
                 
                 # Get distillation loss
                 if self.dist and (bft or self.n_classes > 1):
@@ -504,11 +504,10 @@ class IncrNet(nn.Module):
                     else:
                         dist_loss = MultiClassCrossEntropyLoss(
                             logits_dist, dist_target, self.T, device=self.device)
+                    
+                    loss = dist_loss*self.T*self.T + cls_loss 
                 else:
-                    # No distillation loss
-                    dist_loss = 0
-
-                loss = dist_loss*self.T*self.T + cls_loss
+                    loss = cls_loss
                 
                 loss.backward(retain_graph=True)
                 # get the grads for each layer (dL/dW)
@@ -520,8 +519,14 @@ class IncrNet(nn.Module):
                         p.shape, device=self.device).normal_(std=self.std[epoch]))
 
                 optimizer.step()
-                tqdm.write('Epoch [%d/%d], Iter [%d/%d] Loss: %.4f'
-                           % ((epoch+1), num_epoch, i % num_batches_per_epoch+1, 
-                              num_batches_per_epoch, loss.data))
+                if not self.dist or (self.n_classes == 1 and not bft):
+                    tqdm.write('Epoch [%d/%d], Iter [%d/%d] Loss: %.4f cls_loss: %.4f' 
+                           %((epoch+1), num_epoch, i%num_batches_per_epoch+1, num_batches_per_epoch, loss.data, cls_loss.data))
+                else:
+                    tqdm.write('Epoch [%d/%d], Iter [%d/%d] Loss: %.4f cls_loss: %.4f dist_loss: %.4f' 
+                           %((epoch+1), num_epoch, i%num_batches_per_epoch+1, num_batches_per_epoch, loss.data, cls_loss.data, dist_loss.data))
+                # tqdm.write('Epoch [%d/%d], Iter [%d/%d] Loss: %.4f'
+                #            % ((epoch+1), num_epoch, i % num_batches_per_epoch+1, 
+                #               num_batches_per_epoch, loss.data))
 
                 pbar.update(1)
