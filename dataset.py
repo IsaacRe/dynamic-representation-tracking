@@ -4,7 +4,7 @@ import cv2
 import random
 import sys
 import copy
-from color_jitter.jitter import jitter
+from utils.color_jitter.jitter import jitter
 from utils.get_samples import get_samples
 
 

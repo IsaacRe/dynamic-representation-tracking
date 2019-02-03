@@ -16,11 +16,11 @@ from data_generator.data_generator import DataGenerator
 from data_generator import all_classes
 import pdb
 
-parser = argparse.ArgumentParser(description='Continuum learning')
+parser = argparse.ArgumentParser(description='Incremental learning')
 
 # Saving options
 parser.add_argument('--outfile', default='results/temp.csv', type=str,
-                    help='Output file name')
+                    help='Output file name (should have .csv extension)')
 parser.add_argument('--save_all', dest='save_all', action='store_true',
                     help='Option to save models after each '
                          'test_freq number of learning exposures')
@@ -35,11 +35,11 @@ parser.add_argument('--resume_outfile', default=None, type=str,
 parser.add_argument('--init_lr', default=0.01, type=float,
                     help='initial learning rate')
 parser.add_argument('--init_lr_ft', default=0.001, type=float,
-                    help='Init learning rate for fine tuning (for E2E)')
+                    help='Init learning rate for balanced finetuning (for E2E)')
 parser.add_argument('--num_epoch', default=15, type=int,
                     help='Number of epochs')
 parser.add_argument('--num_epoch_ft', default=10, type=int,
-                    help='Number of epochs for finetuning (for E2E)')
+                    help='Number of epochs for balanced finetuning (for E2E)')
 parser.add_argument('--lrd', default=10.0, type=float,
                     help='Learning rate decrease factor')
 parser.add_argument('--wd', default=0.00001, type=float,
@@ -80,9 +80,6 @@ parser.add_argument('--ncm', dest='ncm', action='store_true',
 # Training options
 parser.add_argument('--diff_order', dest='d_order', action='store_true',
                     help='Use a random order of classes introduced')
-parser.add_argument('--pre_augment', dest='pre_augment', action='store_true',
-                    help='Whether to augment the dataset just once'
-                         ' before training starts (for E2E)')
 parser.add_argument('--no_jitter', dest='jitter', action='store_false',
                     help='Option for no color jittering (for iCaRL)')
 parser.add_argument('--h_ch', default=0.02, type=float,
@@ -97,7 +94,8 @@ parser.add_argument('--test_freq', default=1, type=int,
                     help='Number of iterations of training after'
                          ' which a test is done/model saved')
 parser.add_argument('--num_workers', default=8, type=int,
-                    help='Maximum number of threads spawned')
+                    help='Maximum number of threads spawned at any' 
+                         'stage of execution')
 parser.add_argument('--one_gpu', dest='one_gpu', action='store_true',
                     help='Option to run multiprocessing on 1 GPU')
 
@@ -112,6 +110,11 @@ parser.set_defaults(save_all=False)
 parser.set_defaults(resume=False)
 parser.set_defaults(one_gpu=False)
 
+
+# Print help if no arguments passed
+if len(sys.argv)==1:
+    parser.print_help(sys.stderr)
+    sys.exit(1)
 
 args = parser.parse_args()
 torch.backends.cudnn.benchmark = True
@@ -480,7 +483,8 @@ def test_run(device):
 
             test_acc = np.mean(acc_matr[:test_model.n_known, s])
             print('%.2f ,' % test_acc, file=file)
-            print("[Test Process] Test Accuracy after %d iterations : " %
+            print('[Test Process] =======> Test Accuracy after %d'
+                  ' learning exposures : ' %
                   (s + args.test_freq), test_acc)
 
             print("[Test Process] Saving model and other data")
