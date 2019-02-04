@@ -6,21 +6,21 @@ from Contiguous Views](link)
 - Python 3.5+ 
 - [Pytorch 1.0.0](https://pytorch.org/)
 - For other requirements:
-```bash
-pip install numpy torchvision opencv-python tqdm Cython 
-```
+    ```bash
+    pip install numpy torchvision opencv-python tqdm Cython 
+    ```
 - Running the script for plotting results as a graph also needs matplotlib
-```bash
-pip install matplotlib
-```
+    ```bash
+    pip install matplotlib
+    ```
 
 - For building the color jittering C++ module (Cython required, build using 
 development package of python), run the following commands:
-```bash
-cd utils/color_jitter
-python setup.py build_ext --inplace
-cd ../..
-```
+    ```bash
+    cd utils/color_jitter
+    python setup.py build_ext --inplace
+    cd ../..
+    ```
 
 ### Running Incremental Learning Models
 ```
