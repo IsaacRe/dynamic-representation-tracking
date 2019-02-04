@@ -153,7 +153,8 @@ else:
 
 # NOTE : a permutation file should be present for repeated exposures expt
 # this is to ensure that over multiple runs permutations are generated the
-# way described in the 'Experiments' section of the paper
+# so that all different runs are exposed to the same number of objects
+# by any learning exposure
 if args.num_iters > args.total_classes:
     if not args.num_iters % args.total_classes == 0:
         raise Exception('Currently no support for num_iters%total_classes != 0')
