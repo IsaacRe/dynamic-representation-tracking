@@ -6,23 +6,30 @@ from Contiguous Views](link)
 - Python 3.5+ 
 - [Pytorch 1.0.0](https://pytorch.org/)
 - For other requirements:
-    ```bash
-    pip install numpy torchvision opencv-python tqdm Cython 
-    ```
+```bash
+pip install numpy torchvision opencv-python tqdm Cython 
+```
 - Running the script for plotting results as a graph also needs matplotlib
-    ```bash
-    pip install matplotlib
-    ```
+```bash
+pip install matplotlib
+```
 
 - For building the color jittering C++ module (Cython required, build using 
 development package of python), run the following commands:
-    ```bash
-    cd utils/color_jitter
-    python setup.py build_ext --inplace
-    cd ../..
-    ```
+```bash
+cd utils/color_jitter
+python setup.py build_ext --inplace
+cd ../..
+```
 
 ### Running Incremental Learning Models
+
+The code has a separate train and test process. Both can run simultaneously 
+using 1 GPU provided that batch_size + test_batch_size images can fit on GPU
+memory. By default, the train and test processes use the first and second GPU
+devices visible, unless the '--one_gpu' flag is used, in which case both use 
+the first device visible. 
+
 ```
 usage: main.py [-h] [--outfile OUTFILE] [--save_all]
                [--save_all_dir SAVE_ALL_DIR] [--resume]
@@ -95,11 +102,8 @@ optional arguments:
                         execution
   --one_gpu             Option to run multiprocessing on 1 GPU
 ```
-The code has a separate train and test process. Both can run simultaneously 
-using 1 GPU provided that batch_size + test_batch_size images can fit on GPU
-memory. By default, the train and test processes use the first and second GPU
-devices visible, unless the '--one_gpu' flag is used, in which case both use 
-the first device visible. Following is an example command to run an incremental,
+
+Following is an example command to run an incremental,
 learning experiment on CRIB-Toys followed by the command to run a script for
 plotting results
 
