@@ -1,5 +1,5 @@
 # Incremental Object Learning from Contiguous Views
-This is the code for the CVPR 2019 paper [Incremental Object Learning from Contiguous Views](link)
+This is the code for our CVPR 2019 paper [Incremental Object Learning from Contiguous Views](link)
 
 
 ### Requirements
