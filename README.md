@@ -1,5 +1,6 @@
 # Incremental Object Learning from Contiguous Views
-This is the code for the CVPR 2019 paper [Incremental Object Learning from Contiguous Views](link) 
+This is the code for the CVPR 2019 paper [Incremental Object Learning from Contiguous Views](link)
+
 
 ### Requirements
 - Python 3.5+ 
@@ -22,7 +23,9 @@ This is the code for the CVPR 2019 paper [Incremental Object Learning from Conti
 
 ### Running Incremental Learning Models
 
-The code has a separate train and test process. Both can run simultaneously using 1 GPU provided that batch_size + test_batch_size images can fit on GPU memory. By default, the train and test processes use the first and second GPU devices visible, unless the '--one_gpu' flag is used, in which case both use the first device visible. 
+This is a stripped down version of the code and does not include the entire CRIB (Continual Recognition Inspired by Babies) data generator. For running experiments using this code, please download CRIB-Toys data from the following [link](link) 
+
+The main program has a separate train and test process. Both can run simultaneously using 1 GPU provided that batch_size + test_batch_size images can fit on GPU memory. By default, the train and test processes use the first and second GPU devices visible, unless the '--one_gpu' flag is used, in which case both use the first device visible. 
 
 ```
 usage: main.py [-h] [--outfile OUTFILE] [--save_all]
@@ -97,7 +100,7 @@ optional arguments:
   --one_gpu             Option to run multiprocessing on 1 GPU
 ```
 
-Following is an example command to run an incremental, learning experiment on CRIB-Toys followed by the command to run a script for plotting results
+Following is an example command to run an incremental learning experiment on CRIB-Toys followed by the command to run a script for plotting results
 
 ```bash
 python main.py --num_exemplars 600 --num_epoch 20 --total_classes 50 --num_iters 500 --algo icarl --pt --no_dist --batch_size 100 --diff_order --outfile results/icarl_pt_nd_50obj_10exp.csv
