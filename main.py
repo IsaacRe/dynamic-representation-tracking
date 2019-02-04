@@ -65,7 +65,9 @@ parser.add_argument('--rendered_img_size', default=300, type=int,
 parser.add_argument('--total_classes', default=200, type=int,
                     help='Total number of classes')
 parser.add_argument('--num_iters', default=200, type=int,
-                    help='Number of learning exposures')
+                    help='Total number of learning exposures (currently'
+                         ' only integer multiples of args.total_classes'
+                         ' each class seen equal number of times)')
 
 # Model options
 parser.add_argument('--algo', default='icarl', type=str,
@@ -153,9 +155,22 @@ else:
 # this is to ensure that over multiple runs permutations are generated the
 # way described in the 'Experiments' section of the paper
 if args.num_iters > args.total_classes:
-    perm_id_all = np.load(
-                    'permutation_files/permutation_%d_%d.npy' %
-                    (args.total_classes, args.num_iters//args.total_classes))
+    if not args.num_iters % args.total_classes == 0:
+        raise Exception('Currently no support for num_iters%total_classes != 0')
+    
+    num_repetitions = args.num_iters//args.total_classes
+    perm_file = 'permutation_files/permutation_%d_%d.npy' % (args.total_classes, 
+                                                             num_repetitions)
+
+    if not os.path.exists(perm_file):
+        os.makedirs('permutation_files', exist_ok=True)
+        # Create random permutation file and save
+        perm_arr = np.array(num_repetitions 
+                            * list(np.arange(args.total_classes)))
+        np.random.shuffle(perm_arr)
+        np.save(perm_file, perm_arr)
+    
+    perm_id_all = np.load(perm_file)
     for i in range(len(perm_id_all)):
         perm_id_all[i] = perm_id[perm_id_all[i]]
     perm_id = perm_id_all

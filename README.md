@@ -7,9 +7,16 @@ Bibitem
 ```
 
 
-### Dependencies
-For building the color jittering C++ module (Cython required), 
-run the following commands:
+### Requirements
+- Python3.5+ 
+- [Pytorch 1.0.0](https://pytorch.org/)
+- For other requirements:
+```bash
+pip install numpy torchvision opencv-python tqdm Cython 
+```
+
+For building the color jittering C++ module (Cython required, build using 
+development package of python), run the following commands:
 ```
 cd utils/color_jitter
 python setup.py build_ext --inplace
@@ -89,5 +96,10 @@ optional arguments:
   --one_gpu             Option to run multiprocessing on 1 GPU
 
 ```
+The code has a separate train and test process. Both can run simultaneously 
+using 1 GPU provided that batch_size + test_batch_size images can fit on GPU
+memory. By default, the train and test processes use the first and second GPU
+devices visible, unless the '--one_gpu' flag is used, in which case both use 
+the first device visible.
 
 
