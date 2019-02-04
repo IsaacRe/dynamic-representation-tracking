@@ -1,6 +1,5 @@
 # Incremental Object Learning from Contiguous Views
-This is the code for the CVPR 2019 paper [Incremental Object Learning 
-from Contiguous Views](link) 
+This is the code for the CVPR 2019 paper [Incremental Object Learning from Contiguous Views](link) 
 
 ### Requirements
 - Python 3.5+ 
@@ -14,8 +13,7 @@ pip install numpy torchvision opencv-python tqdm Cython
 pip install matplotlib
 ```
 
-- For building the color jittering C++ module (Cython required, build using 
-development package of python), run the following commands:
+- For building the color jittering C++ module (Cython required, build using development package of python), run the following commands:
 ```bash
 cd utils/color_jitter
 python setup.py build_ext --inplace
@@ -24,11 +22,7 @@ cd ../..
 
 ### Running Incremental Learning Models
 
-The code has a separate train and test process. Both can run simultaneously 
-using 1 GPU provided that batch_size + test_batch_size images can fit on GPU
-memory. By default, the train and test processes use the first and second GPU
-devices visible, unless the '--one_gpu' flag is used, in which case both use 
-the first device visible. 
+The code has a separate train and test process. Both can run simultaneously using 1 GPU provided that batch_size + test_batch_size images can fit on GPU memory. By default, the train and test processes use the first and second GPU devices visible, unless the '--one_gpu' flag is used, in which case both use the first device visible. 
 
 ```
 usage: main.py [-h] [--outfile OUTFILE] [--save_all]
@@ -103,9 +97,7 @@ optional arguments:
   --one_gpu             Option to run multiprocessing on 1 GPU
 ```
 
-Following is an example command to run an incremental,
-learning experiment on CRIB-Toys followed by the command to run a script for
-plotting results
+Following is an example command to run an incremental, learning experiment on CRIB-Toys followed by the command to run a script for plotting results
 
 ```bash
 python main.py --num_exemplars 600 --num_epoch 20 --total_classes 50 --num_iters 500 --algo icarl --pt --no_dist --batch_size 100 --diff_order --outfile results/icarl_pt_nd_50obj_10exp.csv
@@ -118,6 +110,5 @@ If you use this code, please cite our work :
 Bibitem
 ```
 
-We used donlee90's [Pytorch implementation of iCaRL](https://github.com/donlee90/icarl)
-as a starting point for our implementation.
+We used donlee90's [Pytorch implementation of iCaRL](https://github.com/donlee90/icarl) as a starting point for our implementation.
 
