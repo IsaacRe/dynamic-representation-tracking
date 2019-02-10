@@ -433,7 +433,7 @@ def test_run(device):
 
     test_wait_time = 0
     with open(args.outfile, 'w') as file:
-        print("model classes, Train Accuracy, Test Accuracy", file=file)
+        print("Model classes, Test Accuracy", file=file)
         while s < args.num_iters:
 
             # Wait till training is done
