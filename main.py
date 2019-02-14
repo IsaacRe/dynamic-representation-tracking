@@ -142,7 +142,7 @@ if args.save_all:
     os.makedirs(
         '%s-saved_models' % (os.path.join(
                                 args.save_all_dir,
-                                (args.outfile).split('.')[0])), 
+                                os.path.splitext(args.outfile)[0])), 
         exist_ok=True)
 
 # permutation of classes
@@ -218,17 +218,17 @@ expanded_classes = data_mgr.list([None for i in range(args.test_freq)])
 
 if args.resume:
     print('resuming model from %s-model.pth.tar' %
-          (args.outfile).split('.')[0])
+          os.path.splitext(args.outfile)[0])
 
-    model = torch.load('%s-model.pth.tar' % (args.outfile).split('.')
-                       [0], map_location=lambda storage, loc: storage)
+    model = torch.load('%s-model.pth.tar' % os.path.splitext(args.outfile)[0], 
+                       map_location=lambda storage, loc: storage)
     model.device = train_device
 
     model.exemplar_means = []
     model.compute_means = True
 
-    info_classes = np.load('%s-classes.npz' % (args.outfile).split('.')[0])
-    info_matr = np.load('%s-matr.npz' % (args.outfile).split('.')[0])
+    info_classes = np.load('%s-classes.npz' % os.path.splitext(args.outfile)[0])
+    info_matr = np.load('%s-matr.npz' % os.path.splitext(args.outfile)[0])
     if expt_githash != info_classes['expt_githash']:
         print('Warning : Code was changed since the last time model was saved')
         print('Last commit hash : ', info_classes['expt_githash'])
@@ -409,7 +409,7 @@ def train_run(device):
         cond_var.notify_all()
         cond_var.release()
 
-        np.savez('%s-classes.npz' % (args.outfile)[:-4], 
+        np.savez('%s-classes.npz' % os.path.splitext(args.outfile)[0], 
                  model_classes_seen=model_classes_seen,
                  classes_seen=classes_seen, 
                  expt_githash=expt_githash, 
@@ -507,16 +507,16 @@ def test_run(device):
             test_model.cpu()
             if not args.save_all:
                 torch.save(test_model, '%s-model.pth.tar' %
-                           (args.outfile).split('.')[0])
+                           os.path.splitext(args.outfile)[0])
             else:
                 torch.save(test_model, '%s-saved_models/model_iter_%d.pth.tar' %
                            (os.path.join(args.save_all_dir, 
-                                         (args.outfile).split('.')[0]), s))
+                                         os.path.splitext(args.outfile)[0]), s))
 
             # loop var increment
             s += args.test_freq
 
-            np.savez('%s-matr.npz' % (args.outfile).split('.')[0], 
+            np.savez('%s-matr.npz' % os.path.splitext(args.outfile)[0], 
                      acc_matr=acc_matr, 
                      model_hyper_params=model.fetch_hyper_params(), 
                      args=args, num_iters_done=s)
