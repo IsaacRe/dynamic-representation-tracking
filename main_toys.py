@@ -1,7 +1,7 @@
 from model import IncrNet
 import torch
 from torch.autograd import Variable
-from dataset import iToys
+from dataset import iDataset
 import argparse
 import time
 import numpy as np
@@ -12,7 +12,7 @@ import os
 import torch.multiprocessing as mp
 import atexit
 import sys
-from data_generator.data_generator import DataGenerator
+from data_generator.toys_data_generator import DataGenerator
 from data_generator import all_classes
 import pdb
 
@@ -177,7 +177,7 @@ if args.num_iters > args.total_classes:
     perm_id = perm_id_all
 
 # loading mean image; resizing to rendered image size if necessary
-mean_image = np.load('data_generator/mean_image.npy')
+mean_image = np.load('data_generator/toys_mean_image.npy')
 mean_image = cv2.resize(
     mean_image, (args.rendered_img_size, args.rendered_img_size))
 mean_image = np.uint8(mean_image)
@@ -255,7 +255,7 @@ if args.resume:
     # expanding test set to everything seen earlier
     for cl in model.classes:
         print('Expanding class for resuming : ', cl)
-        test_set.expand(args, [data_generators[class_map[cl]]], [
+        test_set.expand(args, [[data_generators[class_map[cl]]]], [
                         cl], model.classes_map, 'test')
 
     # Get the datagenerators state upto resuming point
@@ -272,9 +272,9 @@ def train_run(device):
     if args.algo == 'e2e':
         # Empty train set which would be combined 
         # with exemplars for balanced finetuning
-        bf_train_set = iToys(args, mean_image, data_generators=[], 
-                             max_data_size=max_train_data_size,
-                             job='train')
+        bf_train_set = iDataset(args, mean_image, data_generators=[], 
+                                max_data_size=max_train_data_size,
+                                job='train')
     model.cuda(device=device)
     s = len(classes_seen)
     print('####### Train Process Running ########')
@@ -320,13 +320,13 @@ def train_run(device):
               (model_curr_class_idx, curr_class, s))
 
         if train_set is None:
-            train_set = iToys(args, mean_image, 
-                              [data_generators[curr_class_idx]], 
-                              max_train_data_size, 
-                              [curr_class], model.classes_map, 
-                              'train', le_idx=s)
+            train_set = iDataset(args, mean_image, 
+                                 [[data_generators[curr_class_idx]]], 
+                                 max_train_data_size, 
+                                 [curr_class], model.classes_map, 
+                                 'train', le_idx=s)
         else:
-            train_set.pseudo_init(args, [data_generators[curr_class_idx]], 
+            train_set.pseudo_init(args, [[data_generators[curr_class_idx]]], 
                                   [curr_class], model.classes_map, 'train', 
                                   le_idx=s)
 
@@ -425,8 +425,8 @@ def train_run(device):
 
 
 def test_run(device):
-    test_set = iToys(args, mean_image, data_generators=[],
-                     max_data_size=max_test_data_size, job='test')
+    test_set = iDataset(args, mean_image, data_generators=[],
+                        max_data_size=max_test_data_size, job='test')
     print('####### Test Process Running ########')
     test_model = None
     s = args.test_freq * (len(classes_seen)//args.test_freq)
@@ -460,7 +460,7 @@ def test_run(device):
                 if expanded_class is not None:
                     idx, cl = expanded_class
                     print('[Test Process] Loading test data')
-                    test_set.expand(args, [data_generators[idx]],
+                    test_set.expand(args, [[data_generators[idx]]],
                                     [cl], test_model.classes_map, 
                                     'test', args.size_test)
 

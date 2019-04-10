@@ -8,9 +8,22 @@ from utils.color_jitter.jitter import jitter
 from utils.get_samples import get_samples
 
 
-class iToys(torch.utils.data.Dataset):
+class iDataset(torch.utils.data.Dataset):
     def __init__(self, args, mean_image, data_generators, max_data_size,
                  classes=None, class_map=None, job=None, le_idx=-1):
+        '''
+        Args : 
+            args : arguments from the argument parser
+            mean_image : the mean image over the dataset
+            data_generators : a list of len(classes) lists corresponding to each 
+                              class, each of which contains a data_generator 
+                              object for each instance of the class
+            max_data_size : used to preallocate memory in RAM for loading images
+            classes : list of names of classes
+            class_map : map of class name to its label 
+            job : 'train' or 'test'
+            le_idx : if job is 'train', equals the learning exposure index
+        '''
         self.job = job
         self.algo = args.algo
         self.jitter = args.jitter
@@ -159,46 +172,45 @@ class iToys(torch.utils.data.Dataset):
             assert le_idx >= 0, 'Needs to have positive learning exposure index'
 
         for i, cl in enumerate(classes):
-            if job == 'train':
-                data_generator = data_generators[i]
-                images, bboxes = data_generator.getLearningExposure()
-            elif job == 'test':
-                data_generator = data_generators[i]
-                images, bboxes = data_generator.getRandomPoints()
-            else:
-                raise Exception(
-                    "Operation should be either 'test' or 'train'")
+            for data_generator in data_generators[i]:
+                if job == 'train':
+                    images, bboxes = data_generator.getLearningExposure()
+                elif job == 'test':
+                    images, bboxes = data_generator.getRandomPoints()
+                else:
+                    raise Exception(
+                        "Operation should be either 'test' or 'train'")
 
-            # For E2E, get negatively labelled samples only in the
-            # first learning exposure
-            get_negatives = False
-            if self.job == 'train':
-                if (self.algo == 'icarl' or self.algo == 'lwf'
-                        or (self.algo == 'e2e' and le_idx == 0)):
-                    get_negatives = True
+                # For E2E, get negatively labelled samples only in the
+                # first learning exposure
+                get_negatives = False
+                if self.job == 'train':
+                    if (self.algo == 'icarl' or self.algo == 'lwf'
+                            or (self.algo == 'e2e' and le_idx == 0)):
+                        get_negatives = True
 
-            [datax, datay, bb] = get_samples(
-                images, bboxes, cl, self.img_size, class_map, get_negatives)
+                [datax, datay, bb] = get_samples(
+                    images, bboxes, cl, self.img_size, class_map, get_negatives)
 
-            # store mean image for new class
-            data_means = np.array([cv2.resize(self.mean_image[b[2]:b[3], b[0]:b[1]],
-                (self.img_size, self.img_size)).transpose(2, 0, 1) for b in bb])
+                # store mean image for new class
+                data_means = np.array([cv2.resize(self.mean_image[b[2]:b[3], b[0]:b[1]],
+                    (self.img_size, self.img_size)).transpose(2, 0, 1) for b in bb])
 
-            if self.curr_len + len(datax) > len(self.datax):
-                raise Exception("Dataset max length exceeded")
+                if self.curr_len + len(datax) > len(self.datax):
+                    raise Exception("Dataset max length exceeded")
 
-            self.datax[self.curr_len:self.curr_len + len(datax)] = datax
-            self.data_means[self.curr_len:self.curr_len+len(data_means)] = data_means
-            self.datay[self.curr_len:self.curr_len + len(datay)] = datay
-            self.bb[self.curr_len:self.curr_len + len(bb)] = bb
-            self.dataz[self.curr_len:self.curr_len + len(datax), 0] = le_idx
-            
-            # numbering the frames that come in. Each +ve frame is followed 
-            # by a -ve background image when get_negatives is True
-            if get_negatives:
-                self.dataz[self.curr_len:self.curr_len +
-                           len(datax), 1] = np.arange(len(datax)) // 2
-            else:
-                self.dataz[self.curr_len:self.curr_len +
-                           len(datax), 1] = np.arange(len(datax))
-            self.curr_len += len(datax)
+                self.datax[self.curr_len:self.curr_len + len(datax)] = datax
+                self.data_means[self.curr_len:self.curr_len+len(data_means)] = data_means
+                self.datay[self.curr_len:self.curr_len + len(datay)] = datay
+                self.bb[self.curr_len:self.curr_len + len(bb)] = bb
+                self.dataz[self.curr_len:self.curr_len + len(datax), 0] = le_idx
+                
+                # numbering the frames that come in. Each +ve frame is followed 
+                # by a -ve background image when get_negatives is True
+                if get_negatives:
+                    self.dataz[self.curr_len:self.curr_len +
+                               len(datax), 1] = np.arange(len(datax)) // 2
+                else:
+                    self.dataz[self.curr_len:self.curr_len +
+                               len(datax), 1] = np.arange(len(datax))
+                self.curr_len += len(datax)
