@@ -191,7 +191,7 @@ model = IncrNet(args, device=train_device)
 
 
 classes = []
-with open('train_instances.json') as tm_file:
+with open('data_generator/shapenet_train_instances.json') as tm_file:
     train_instances = json.load(tm_file)
     for cl in train_instances:
         classes.append(cl)
@@ -200,7 +200,7 @@ with open('train_instances.json') as tm_file:
             tmp_list.append(modelID)
         train_instances[cl] = tmp_list
 classes.sort()
-with open('test_instances.json') as tm_file:
+with open('data_generator/shapenet_test_instances.json') as tm_file:
     test_instances = json.load(tm_file)
     for cl in test_instances:
         tmp_list = []
