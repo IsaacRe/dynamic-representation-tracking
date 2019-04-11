@@ -156,14 +156,13 @@ else:
 # so that all different runs are exposed to the same number of objects
 # by any learning exposure
 if args.num_instance_per_class > 1:
-    num_repetitions = args.total_classes * args.num_instance_per_class
-    perm_file = 'permutation_files/permutation_%d_%d.npy' % (args.total_classes, 
-                                                             num_repetitions)
+    perm_file = ('permutation_files/permutation_%d_%d.npy' 
+                 % (args.total_classes, args.num_instance_per_class))
 
     if not os.path.exists(perm_file):
         os.makedirs('permutation_files', exist_ok=True)
         # Create random permutation file and save
-        perm_arr = np.array(num_repetitions 
+        perm_arr = np.array(args.num_instance_per_class 
                             * list(np.arange(args.total_classes)))
         np.random.shuffle(perm_arr)
         np.save(perm_file, perm_arr)
