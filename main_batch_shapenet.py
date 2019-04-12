@@ -4,6 +4,8 @@ import random
 import shutil
 import time
 import warnings
+import numpy as np
+import cv2
 
 import json
 import sys
@@ -26,7 +28,7 @@ model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
     and callable(models.__dict__[name]))
 
-parser = argparse.ArgumentParser(description='PyTorch ShapeNet Training')
+parser = argparse.ArgumentParser(description='PyTorch ShapeNet Batch Training')
 parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet34',
                     choices=model_names,
                     help='model architecture: ' +
@@ -66,6 +68,8 @@ parser.add_argument('--gpu', default=None, type=int,
                     help='GPU id to use.')
 parser.add_argument('-ncl', '--num_classes', default=20,
                     help='number of classes in the classification task')
+parser.add_argument('-ckpt', '--checkpoint_file', default='checkpoint',
+					help='checkpoint name to save to')
 
 parser.add_argument('--no_jitter', dest='jitter', action='store_false',
                     help='Option for no color jittering (for iCaRL)')
@@ -210,7 +214,7 @@ def main():
     classes.sort() # So the order doesn't change and hence neither do the labels
     class_map = {cl:i for i,cl in enumerate(classes)}
     
-    train_dgs = [[DataGenerator(category_name=classes[i], 
+    train_dgs = [[DataGenerator(category_name=cl, 
                                 instance_name=instance, 
                                 n_frames=args.lexp_len, 
                                 size_test=args.size_test,
@@ -219,7 +223,7 @@ def main():
                   for instance in train_instances[cl]] 
                   for cl in classes]
 
-    val_dgs = [[DataGenerator(category_name=classes[i], 
+    val_dgs = [[DataGenerator(category_name=cl, 
                               instance_name=instance, 
                               n_frames=args.lexp_len, 
                               size_test=args.size_test,
@@ -228,7 +232,7 @@ def main():
                   for instance in val_instances[cl]] 
                   for cl in classes]
 
-    test_dgs = [[DataGenerator(category_name=classes[i], 
+    test_dgs = [[DataGenerator(category_name=cl, 
                                instance_name=instance, 
                                n_frames=args.lexp_len, 
                                size_test=args.size_test,
@@ -247,6 +251,10 @@ def main():
                           * args.size_test 
                           * args.num_test_instance_per_class)
     
+    # Correct settings for initializing iDataset
+    args.algo = 'icarl'
+    args.jitter = True
+
     if args.evaluate:
         print('Loading Test Data')
         val_set = iDataset(args, mean_image, test_dgs, max_test_data_size, 
@@ -254,10 +262,10 @@ def main():
     else:
         print('Loading Training Data')
         train_set = iDataset(args, mean_image, train_dgs, max_train_data_size, 
-                             classes, class_map, 'train')
+                             classes, class_map, 'batch_train')
         print('Loading Val Data')
-        val_set = iDataset(args mean_image, val_dgs, max_val_data_size, 
-                           classes, class_map, 'val')
+        val_set = iDataset(args, mean_image, val_dgs, max_val_data_size, 
+                           classes, class_map, 'batch_val')
 
         train_loader = torch.utils.data.DataLoader(
             train_set, batch_size=args.batch_size, shuffle=True,
@@ -291,7 +299,7 @@ def main():
             'state_dict': model.state_dict(),
             'best_acc1': best_acc1,
             'optimizer' : optimizer.state_dict(),
-        }, is_best)
+        }, is_best, args.checkpoint_file)
 
 
 def train(train_loader, model, criterion, optimizer, epoch):
@@ -389,10 +397,10 @@ def validate(val_loader, model, criterion):
     return top1.avg
 
 
-def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
-    torch.save(state, filename)
+def save_checkpoint(state, is_best, filename='checkpoint'):
+    torch.save(state, filename+'.pth.tar')
     if is_best:
-        shutil.copyfile(filename, 'model_best.pth.tar')
+        shutil.copyfile(filename, filename+'-model_best.pth.tar')
 
 
 class AverageMeter(object):

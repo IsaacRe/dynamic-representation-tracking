@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import torch.utils.data
 import cv2
 import random
 import sys
@@ -21,7 +22,9 @@ class iDataset(torch.utils.data.Dataset):
             max_data_size : used to preallocate memory in RAM for loading images
             classes : list of names of classes
             class_map : map of class name to its label 
-            job : 'train', 'test' or 'val' ('val' only used for batch learner)
+            job : 'train', 'test', 'batch_train', 'batch_val'
+                  'batch_val' loads learning exposures but no augmentations
+                  'batch_train' loads learning exposures without negative patches
             le_idx : if job is 'train', equals the learning exposure index
         '''
         self.job = job
@@ -69,7 +72,7 @@ class iDataset(torch.utils.data.Dataset):
         curr_mean = np.float32(self.data_means[index])
         bb = self.bb[index]
 
-        if self.job == 'train':
+        if self.job == 'train' or self.job == 'batch_train':
             if self.algo == 'icarl' or self.algo == 'lwf':
                 # Augment : Color jittering
                 if self.jitter:
@@ -124,7 +127,7 @@ class iDataset(torch.utils.data.Dataset):
                 if rand_num == 1:
                     curr_img = copy.deepcopy(curr_img[:, :, ::-1])
 
-        elif self.job == 'test':
+        elif self.job == 'test' or self.job == 'batch_val':
             curr_img = torch.FloatTensor((curr_img - curr_mean)/255.)
 
         target = self.datay[index]
@@ -168,12 +171,11 @@ class iDataset(torch.utils.data.Dataset):
         '''
         Call data generator to get images and append to dataset
         '''
-        if job == 'train':
-            assert le_idx >= 0, 'Needs to have positive learning exposure index'
-
         for i, cl in enumerate(classes):
             for data_generator in data_generators[i]:
-                if job == 'train' or self.job == 'val':
+                if (job == 'train' 
+                        or self.job == 'batch_train' 
+                        or self.job == 'batch_val'):
                     images, bboxes = data_generator.getLearningExposure()
                 elif job == 'test':
                     images, bboxes = data_generator.getRandomPoints()
