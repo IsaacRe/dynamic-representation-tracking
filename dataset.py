@@ -21,7 +21,7 @@ class iDataset(torch.utils.data.Dataset):
             max_data_size : used to preallocate memory in RAM for loading images
             classes : list of names of classes
             class_map : map of class name to its label 
-            job : 'train' or 'test'
+            job : 'train', 'test' or 'val' ('val' only used for batch learner)
             le_idx : if job is 'train', equals the learning exposure index
         '''
         self.job = job
@@ -173,7 +173,7 @@ class iDataset(torch.utils.data.Dataset):
 
         for i, cl in enumerate(classes):
             for data_generator in data_generators[i]:
-                if job == 'train':
+                if job == 'train' or self.job == 'val':
                     images, bboxes = data_generator.getLearningExposure()
                 elif job == 'test':
                     images, bboxes = data_generator.getRandomPoints()
