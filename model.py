@@ -389,12 +389,15 @@ class IncrNet(nn.Module):
         if self.algo == 'icarl':
             self.combine_dataset_with_exemplars(dataset)
 
-        if self.sample == 'minibatch_sampling':
-            weights = dataset.get_class_weights()
-        else:
-            weights = None
+        # if self.sample == 'minibatch_sampling':
+        #     weights = dataset.get_class_weights()
+        # else:
+        #     weights = None
 
-        sampler = CustomRandomSampler(dataset, self.num_epoch, num_workers, weights=weights)
+        if self.sample == 'minibatch_sampling_inflate':
+        	dataset.inflate_dataset()
+
+        sampler = CustomRandomSampler(dataset, self.num_epoch, num_workers)
         batch_sampler = CustomBatchSampler(
             sampler, self.batch_size, drop_last=False, epoch_size=len(dataset))
         num_batches_per_epoch = batch_sampler.num_batches_per_epoch

@@ -163,6 +163,41 @@ class iDataset(torch.utils.data.Dataset):
         print("weights: ", self.weights[:self.curr_len])
         return self.weights[:self.curr_len]
 
+    def inflate_dataset(self):
+    	cnt = Counter(self.datay[:self.curr_len])
+    	curr_data_y = self.datay[:self.curr_len]
+    	curr_data_x = self.datax[:self.curr_len]
+    	curr_bb = self.bb[:self.curr_len]
+    	curr_data_z = self.dataz[:self.curr_len]
+    	most_common_class, most_common_images = cnt.most_common(1)[0]
+    	for label, count in cnt.items():
+    		if label != most_common_class:
+    			datax = curr_data_x[curr_data_y == label]
+    			datay = curr_data_y[curr_data_y == label]
+    			dataz = curr_data_z[curr_data_y == label]
+    			bb = curr_bb[curr_data_y == label]
+
+    			# print('Most common classes: ', most_common_class)
+    			# print('Most common count: ', most_common_images)
+    			# print('Len datax: ', len(datax))
+    			# print('label: ', label)
+    			# print('len most common class: ', len(curr_data_x[most_common_class]))
+
+
+    			# print('-------', len(curr_data_x[most_common_class])-len(datax))
+
+    			indices_selected = np.random.choice(len(datax),len(curr_data_x[curr_data_y == most_common_class])-len(datax),replace=True)
+    			datax_selected = datax[indices_selected]
+    			datay_selected = datay[indices_selected]
+    			dataz_selected = dataz[indices_selected]
+    			bb_selected = bb[indices_selected]
+
+    			self.datax[self.curr_len:len(datax_selected)+self.curr_len] = datax_selected
+    			self.datay[self.curr_len:len(datay_selected)+self.curr_len] = datay_selected
+    			self.dataz[self.curr_len:len(dataz_selected)+self.curr_len] = dataz_selected
+    			self.bb[self.curr_len:len(bb_selected)+self.curr_len] = bb_selected
+    			self.curr_len += len(datax_selected)
+
     def clear(self):
         self.curr_len = 0
 

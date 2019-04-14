@@ -196,7 +196,10 @@ mean_image = cv2.resize(
 mean_image = np.uint8(mean_image)
 
 # To pass to dataloaders for preallocation
-max_train_data_size = 2 * args.lexp_len + args.num_exemplars
+if args.sample != 'minibatch_sampling_inflate':
+	max_train_data_size = 2 * args.lexp_len + args.num_exemplars
+else:
+	max_train_data_size = 2 * args.lexp_len * args.total_classes
 max_test_data_size = args.total_classes * args.size_test
 
 # Initialize CNN
