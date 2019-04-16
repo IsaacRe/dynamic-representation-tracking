@@ -1,4 +1,5 @@
 import numpy as np
+from collections import Counter
 import torch
 import torch.utils.data
 import cv2
@@ -31,6 +32,8 @@ class iDataset(torch.utils.data.Dataset):
         self.algo = args.algo
         self.jitter = args.jitter
         self.img_size = args.img_size
+        self.aug = args.aug
+        self.explr_neg_sig = args.explr_neg_sig
 
         self.datax = np.empty((max_data_size,3,
                                self.img_size,self.img_size),
@@ -51,6 +54,9 @@ class iDataset(torch.utils.data.Dataset):
 
         # 3 x rendered_img_size x rendered_img_size
         self.mean_image = mean_image
+
+        # weights for minibatch sampler
+        self.weights = np.ones(max_data_size, dtype=float)
 
         # Can also initialize an empty set and expand later
         if len(data_generators) > 0:
@@ -73,7 +79,7 @@ class iDataset(torch.utils.data.Dataset):
         bb = self.bb[index]
 
         if self.job == 'train' or self.job == 'batch_train':
-            if self.algo == 'icarl' or self.algo == 'lwf':
+            if self.aug == 'icarl':
                 # Augment : Color jittering
                 if self.jitter:
                     jitter(curr_img, self.h_ch, self.s_ch, self.l_ch)
@@ -94,7 +100,7 @@ class iDataset(torch.utils.data.Dataset):
                         crops[0, 1]:(crops[0, 1] + self.img_size)][:, :, ::-1]
 
                 curr_img = torch.FloatTensor(random_cropped)
-            elif self.algo == 'e2e':
+            elif self.aug == 'e2e':
                 # Augment : 
                 # For 3 choices - original image, brightness augmented 
                 # and contrast augmented
@@ -144,6 +150,54 @@ class iDataset(torch.utils.data.Dataset):
                 self.dataz[:self.curr_len][curr_data_y ==label], 
                 self.bb[:self.curr_len][curr_data_y == label])
 
+    def get_class_weights(self):
+        cnt = Counter(self.datay[:self.curr_len])
+        curr_data_y = self.datay[:self.curr_len]
+        total = 0
+        for label, count in cnt.items():
+            self.weights[:self.curr_len][curr_data_y == label] = self.curr_len/count
+            total += self.curr_len / count
+        self.weights[:self.curr_len] /= total
+        print("Counter: ", cnt)
+        print("Curr datay: ", curr_data_y)
+        print("weights: ", self.weights[:self.curr_len])
+        return self.weights[:self.curr_len]
+
+    def inflate_dataset(self):
+    	cnt = Counter(self.datay[:self.curr_len])
+    	curr_data_y = self.datay[:self.curr_len]
+    	curr_data_x = self.datax[:self.curr_len]
+    	curr_bb = self.bb[:self.curr_len]
+    	curr_data_z = self.dataz[:self.curr_len]
+    	most_common_class, most_common_images = cnt.most_common(1)[0]
+    	for label, count in cnt.items():
+    		if label != most_common_class:
+    			datax = curr_data_x[curr_data_y == label]
+    			datay = curr_data_y[curr_data_y == label]
+    			dataz = curr_data_z[curr_data_y == label]
+    			bb = curr_bb[curr_data_y == label]
+
+    			# print('Most common classes: ', most_common_class)
+    			# print('Most common count: ', most_common_images)
+    			# print('Len datax: ', len(datax))
+    			# print('label: ', label)
+    			# print('len most common class: ', len(curr_data_x[most_common_class]))
+
+
+    			# print('-------', len(curr_data_x[most_common_class])-len(datax))
+
+    			indices_selected = np.random.choice(len(datax),len(curr_data_x[curr_data_y == most_common_class])-len(datax),replace=True)
+    			datax_selected = datax[indices_selected]
+    			datay_selected = datay[indices_selected]
+    			dataz_selected = dataz[indices_selected]
+    			bb_selected = bb[indices_selected]
+
+    			self.datax[self.curr_len:len(datax_selected)+self.curr_len] = datax_selected
+    			self.datay[self.curr_len:len(datay_selected)+self.curr_len] = datay_selected
+    			self.dataz[self.curr_len:len(dataz_selected)+self.curr_len] = dataz_selected
+    			self.bb[self.curr_len:len(bb_selected)+self.curr_len] = bb_selected
+    			self.curr_len += len(datax_selected)
+
     def clear(self):
         self.curr_len = 0
 
@@ -187,8 +241,7 @@ class iDataset(torch.utils.data.Dataset):
                 # first learning exposure
                 get_negatives = False
                 if self.job == 'train':
-                    if (self.algo == 'icarl' or self.algo == 'lwf'
-                            or (self.algo == 'e2e' and le_idx == 0)):
+                    if le_idx == 0 or ((self.algo == 'icarl' or self.algo == 'lwf') and not self.explr_neg_sig):
                         get_negatives = True
 
                 [datax, datay, bb] = get_samples(

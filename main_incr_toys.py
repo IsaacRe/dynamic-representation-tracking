@@ -78,6 +78,19 @@ parser.add_argument('--pt', dest='pretrained', action='store_true',
                     help='Option to start from an ImageNet pretrained model')
 parser.add_argument('--ncm', dest='ncm', action='store_true',
                     help='Use nearest class mean classification (for E2E)')
+parser.add_argument('--network', dest='network', action='store_true',
+                    help='Use network output to classify (for iCaRL)')
+parser.add_argument('--aug', default='icarl', type=str,
+                    help='Data augmentation to use')
+parser.add_argument('--full_explr', dest='full_explr', action='store_true',
+                    help='Option to use the full exemplar set')
+parser.add_argument('--explr_neg_sig', dest='explr_neg_sig', action='store_true', help='Option to use exemplars as negative signals (for iCaRL)')
+parser.add_argument('--sample', default='none', type=str,
+                    help='Sampling mechanism to be performed')
+parser.add_argument('--random_explr', dest='random_explr', action='store_true',
+                    help='Option for random exemplar set')
+parser.add_argument('--loss', default='BCE', type=str,
+					help='Loss to be used in classification')
 
 # Training options
 parser.add_argument('--diff_order', dest='d_order', action='store_true',
@@ -183,7 +196,10 @@ mean_image = cv2.resize(
 mean_image = np.uint8(mean_image)
 
 # To pass to dataloaders for preallocation
-max_train_data_size = 2 * args.lexp_len + args.num_exemplars
+if args.sample != 'minibatch_sampling_inflate':
+	max_train_data_size = 2 * args.lexp_len + args.num_exemplars
+else:
+	max_train_data_size = 2 * args.lexp_len * args.total_classes
 max_test_data_size = args.total_classes * args.size_test
 
 # Initialize CNN
