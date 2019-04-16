@@ -245,6 +245,11 @@ for i in range(args.total_classes):
                           resolution=args.rendered_img_size,
                           job='test'))
 
+# Declaring train and test sets
+train_set = None
+test_set = iDataset(args, mean_image, data_generators=[],
+                    max_data_size=max_test_data_size, job='test')
+
 # Conditional variable, shared memory for synchronization
 cond_var = mp.Condition()
 train_counter = mp.Value('i', 0)
@@ -306,7 +311,7 @@ if args.resume:
 
 
 def train_run(device):
-    train_set = None
+    global train_set
     if args.algo == 'e2e':
         # Empty train set which would be combined 
         # with exemplars for balanced finetuning
@@ -464,8 +469,7 @@ def train_run(device):
 
 
 def test_run(device):
-    test_set = iDataset(args, mean_image, data_generators=[],
-                        max_data_size=max_test_data_size, job='test')
+    global test_set
     print('####### Test Process Running ########')
     test_model = None
     s = args.test_freq * (len(classes_seen)//args.test_freq)
