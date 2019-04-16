@@ -531,15 +531,8 @@ class IncrNet(nn.Module):
                 else:
                     loss = cls_loss
                 
-                loss.backward(retain_graph=True)
-                # get the grads for each layer (dL/dW)
-                grads = torch.autograd.grad(loss, self.parameters())
-                # add noise to the grads
-                # dL/dW += N(0, std_e)
-                for p in grads:
-                    p.data.add_(torch.cuda.FloatTensor(
-                        p.shape, device=self.device).normal_(std=self.std[epoch]))
-
+                loss.backward()
+                
                 optimizer.step()
                 tqdm.write('Epoch [%d/%d], Minibatch [%d/%d] Loss: %.4f'
                            % ((epoch+1), num_epoch, i % num_batches_per_epoch+1, 
