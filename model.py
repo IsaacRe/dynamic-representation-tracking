@@ -101,6 +101,15 @@ class IncrNet(nn.Module):
         # random exemplar option
         self.random_exemplar = args.random_explr
 
+        # list keeping track of number of frames of each class that the network has seen in training set
+        self.train_exposures = {}
+        # list keeping track of number of frames of each class that the network has seen in the exemplar set (iCarl only)
+        self.explr_exposures = {}
+        # list keeping track of number of frames of each class that the network has seen during finetuning (E2E only)
+        self.bft_exposures = {}
+        # list keeping track of number of frames of each class in exemplar set during each timestep
+        self.explr_makeup = {}
+
         
     def forward(self, x):
         x = self.feature_extractor(x)
@@ -133,6 +142,10 @@ class IncrNet(nn.Module):
         for i, cl in enumerate(new_classes):
             self.classes_map[cl] = self.n_known + i
             self.classes.append(cl)
+            self.train_exposures[cl] = 0
+            self.explr_exposures[cl] = 0
+            self.bft_exposures[cl] = 0
+            self.explr_makeup[cl] = 0
 
     def compute_exemplar_means(self, mean_image, img_size):
         '''
@@ -385,6 +398,13 @@ class IncrNet(nn.Module):
         self.compute_means = True
         lr = self.init_lr
 
+        # increment number of sample seen for each class
+        train_batch_makeup = [dataset.datay[dataset.datay == self.classes_map[c]].shape[0] for c in self.train_exposures]
+        self.train_exposures = {c: v + n for n, (c, v) in zip(train_batch_makeup, self.train_exposures.items())}
+        self.explr_makeup = {c: 0 if self.classes_map[c] >= len(self.eset_le_maps) else len(self.eset_le_maps[self.classes_map[c]])
+                             for c in self.explr_exposures}
+        self.explr_exposures = {c: self.explr_exposures[c] + self.explr_makeup[c] for c in self.explr_exposures}
+
         # Form combined training set
         if self.algo == 'icarl':
             self.combine_dataset_with_exemplars(dataset)
@@ -505,6 +525,12 @@ class IncrNet(nn.Module):
 
         # Form combined training set
         self.combine_dataset_with_exemplars(dataset)
+
+        # increment number of samples seen per class
+        if not bft:
+            self.train_exposures = {c: v + dataset.datay[dataset.datay == c].shape[0] for (c, v) in self.train_exposures.items()}
+        else:
+            self.bft_exposures = {c: v + dataset.datay[dataset.datay == c].shape[0] for (c, v) in self.bft_exposures.items()}
 
         sampler = CustomRandomSampler(dataset, num_epoch, num_workers)
         batch_sampler = CustomBatchSampler(sampler, self.batch_size, 

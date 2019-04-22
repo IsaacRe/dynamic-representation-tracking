@@ -303,6 +303,21 @@ def train_run(device):
     print('Args: ', args)
     train_wait_time = 0
 
+    exp_file = '.'.join([args.outfile.split('.')[0] + "_exps", args.outfile.split('.')[1]])
+    exp_bft_file = '.'.join([args.outfile.split('.')[0] + "_bft-exps", args.outfile.split('.')[1]])
+    exp_explr_file = '.'.join([args.outfile.split('.')[0] + "_explr-exps", args.outfile.split('.')[1]])
+    explr_makeup_file = '.'.join([args.outfile.split('.')[0] + "_explr-makeup", args.outfile.split('.')[1]])
+    with open(exp_file, 'w+') as f:
+        print(','.join(classes), file=f)
+    if model.algo == 'e2e':
+        with open(exp_bft_file, 'w+') as f:
+            print(','.join(classes), file=f)
+    elif model.algo == 'icarl':
+        with open(exp_explr_file, 'w+') as f:
+            print(','.join(classes), file=f)
+        with open(explr_makeup_file, 'w+') as f:
+            print(','.join(classes), file=f)
+
     while s < args.num_iters:
         time_ptr = time.time()
         # Do not start training till test process catches up
@@ -380,7 +395,6 @@ def train_run(device):
                 model_curr_class_idx)
             model.construct_exemplar_set(images, image_means, le_maps, 
                                          image_bbs, m, model_curr_class_idx, s)
-        
 
         model.n_known = model.n_classes
 
@@ -406,6 +420,18 @@ def train_run(device):
             model.construct_exemplar_set(images, image_means, le_maps, 
                                          image_bbs, m, model_curr_class_idx, 
                                          s, overwrite=True)
+
+        # record exposure statistics
+        with open(exp_file, 'a') as f:
+            print(','.join(['0' if c not in model.classes_map else str(model.train_exposures[c]) for c in classes]), file=f)
+        if model.algo == 'e2e':
+            with open(exp_bft_file, 'a') as f:
+                print(','.join(['0' if c not in model.classes_map else str(model.bft_exposures[c]) for c in classes]), file=f)
+        elif model.algo == 'icarl':
+            with open(exp_explr_file, 'a') as f:
+                print(','.join(['0' if c not in model.classes_map else str(model.explr_exposures[c]) for c in classes]), file=f)
+            with open(explr_makeup_file, 'a') as f:
+                print(','.join(['0' if c not in model.classes_map else str(model.explr_makeup[c]) for c in classes]), file=f)
 
 
         print("Model num classes : %d, " % model.n_known)
@@ -451,6 +477,24 @@ def test_run(device):
     print('####### Test Process Running ########')
     test_model = None
     s = args.test_freq * (len(classes_seen)//args.test_freq)
+
+    # Create per class accuracy and forgets files
+    acc_per_class_file = '.'.join([args.outfile.split('.')[0] + "_acc-per-class", args.outfile.split('.')[1]])
+    with open(acc_per_class_file, 'w+') as f:
+        print(','.join(classes), file=f)
+
+    # TODO port forget/learn code to script to run on discrete dataset
+    """
+    forgets_per_class_file = '.'.join([args.outfile.split('.')[0] + "_forgets", args.outfile.split('.')[1]])
+    learns_per_class_file = '.'.join([args.outfile.split('.')[0] + "_learns", args.outfile.split('.')[1]])
+    with open(forgets_per_class_file, 'w+') as f:
+        print(','.join(classes), file=f)
+    with open(learns_per_class_file, 'w+') as f:
+        print(','.join(classes), file=f)
+    # 2-D array of [last accuracy, class] for each object instance, used for determining when forgetting/learning occurs
+    last_accuracy = np.zeros((max_test_data_size, 2))
+    current_accuracy = np.zeros((max_test_data_size, 2))
+    """
 
     test_wait_time = 0
     with open(args.outfile, 'w') as file:
@@ -512,11 +556,35 @@ def test_run(device):
             all_preds = np.concatenate(all_preds, axis=0)
             all_labels = np.concatenate(all_labels, axis=0)
 
+            # TODO
+            """
+            # update current and last accuracies
+            last_accuracy = np.copy(current_accuracy)
+            current_accuracy[all_indices[all_labels == all_preds], 0] = 1
+            current_accuracy[all_indices[all_labels != all_preds], 0] = 0
+            current_accuracy[all_indices, 1] = all_labels
+
+            # determine forget/learn events
+            masked_last = last_accuracy[all_indices]
+            masked_current = current_accuracy[all_indices]
+            forget_mask = ((masked_last == 1) & (masked_current == 0))
+            learn_mask = ((masked_last == 0) & (masked_current == 1))
+            num_forgets = masked_current[forget_mask].shape[0]
+            num_learns = masked_current[learn_mask].shape[0]
+            print(current_accuracy)
+            print('Learns: %d' % num_learns)
+            print('Forgets: %d' % num_forgets)
+            """
+
             for i in range(test_model.n_known):
                 class_preds = all_preds[all_labels == i]
                 correct = np.sum(class_preds == i)
                 total = len(class_preds)
                 acc_matr[i, s] = (100.0 * correct/total)
+
+            with open(acc_per_class_file, 'a') as f:
+                row_data = ['-1' if c not in test_model.classes_map else str(acc_matr[test_model.classes_map[c], s]) for c in classes]
+                print(','.join(row_data), file=f)
 
             test_acc = np.mean(acc_matr[:test_model.n_known, s])
             print('%.2f ,' % test_acc, file=file)
@@ -531,18 +599,18 @@ def test_run(device):
                            os.path.splitext(args.outfile)[0])
             else:
                 torch.save(test_model, '%s-saved_models/model_iter_%d.pth.tar' %
-                           (os.path.join(args.save_all_dir, 
+                           (os.path.join(args.save_all_dir,
                                          os.path.splitext(args.outfile)[0]), s))
 
             # loop var increment
             s += args.test_freq
 
-            np.savez('%s-matr.npz' % os.path.splitext(args.outfile)[0], 
-                     acc_matr=acc_matr, 
-                     model_hyper_params=model.fetch_hyper_params(), 
+            np.savez('%s-matr.npz' % os.path.splitext(args.outfile)[0],
+                     acc_matr=acc_matr,
+                     model_hyper_params=model.fetch_hyper_params(),
                      args=args, num_iters_done=s)
 
-        print("[Test Process] Done, total time spent waiting : ", 
+        print("[Test Process] Done, total time spent waiting : ",
               test_wait_time)
         all_done.set()
 
