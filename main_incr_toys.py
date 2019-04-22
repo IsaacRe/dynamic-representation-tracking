@@ -91,6 +91,10 @@ parser.add_argument('--random_explr', dest='random_explr', action='store_true',
                     help='Option for random exemplar set')
 parser.add_argument('--loss', default='BCE', type=str,
 					help='Loss to be used in classification')
+parser.add_argument('--fix_explr_sets', action='store_true',
+                    help='Whether to keep exemplar set size fixed for all instances')
+parser.add_argument('--explrs_per_instance', default=3, type=int,
+                    help='Number of exemplars per instance if fixing')
 
 # Training options
 parser.add_argument('--diff_order', dest='d_order', action='store_true',
@@ -381,11 +385,12 @@ def train_run(device):
         model.eval()
         del prev_model
 
-        m = int(K / model.n_classes)
+        m = args.explrs_per_instance if args.fix_explr_sets else int(K / model.n_classes)
 
         if args.algo == 'icarl' or args.algo == 'e2e':
             # Reduce exemplar sets for known classes
-            model.reduce_exemplar_sets(m)
+            if not args.fix_explr_sets:
+                model.reduce_exemplar_sets(m)
 
             # Construct exemplar sets for current class
             print('Constructing exemplar set for class index %d , %s ...' %
