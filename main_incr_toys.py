@@ -95,6 +95,8 @@ parser.add_argument('--fix_explr_sets', action='store_true',
                     help='Whether to keep exemplar set size fixed for all instances')
 parser.add_argument('--explrs_per_instance', default=3, type=int,
                     help='Number of exemplars per instance if fixing')
+parser.add_argument('--debug', action='store_true',
+                    help='Whether to load data in the main process, for debugging in batch loop')
 
 # Training options
 parser.add_argument('--diff_order', dest='d_order', action='store_true',
@@ -376,11 +378,11 @@ def train_run(device):
             model.update_representation_icarl(train_set, 
                                               prev_model, 
                                               [model_curr_class_idx], 
-                                              args.num_workers)
+                                              0 if args.debug else args.num_workers)
         else:
             model.update_representation_e2e(train_set,
                                             prev_model,
-                                            args.num_workers,
+                                            0 if args.debug else args.num_workers,
                                             bft=False)
         model.eval()
         del prev_model
@@ -415,7 +417,7 @@ def train_run(device):
             model.train()
             model.update_representation_e2e(bf_train_set,
                                             prev_model,
-                                            args.num_workers,
+                                            0 if args.debug else args.num_workers,
                                             bft=True)
             model.eval()
             del prev_model
@@ -483,12 +485,6 @@ def test_run(device):
     test_model = None
     s = args.test_freq * (len(classes_seen)//args.test_freq)
 
-    # Create per class accuracy and forgets files
-    acc_per_class_file = '.'.join([args.outfile.split('.')[0] + "_acc-per-class", args.outfile.split('.')[1]])
-    with open(acc_per_class_file, 'w+') as f:
-        print(','.join(classes), file=f)
-
-    # TODO port forget/learn code to script to run on discrete dataset
     """
     forgets_per_class_file = '.'.join([args.outfile.split('.')[0] + "_forgets", args.outfile.split('.')[1]])
     learns_per_class_file = '.'.join([args.outfile.split('.')[0] + "_learns", args.outfile.split('.')[1]])
@@ -542,7 +538,7 @@ def test_run(device):
             test_model.eval()
             test_loader = torch.utils.data.DataLoader(
                 test_set, batch_size=args.batch_size_test, shuffle=False, 
-                num_workers=args.num_workers, pin_memory=True)
+                num_workers=0 if args.debug else args.num_workers, pin_memory=True)
 
             print("%d, " % test_model.n_known, end="", file=file)
 
@@ -561,7 +557,6 @@ def test_run(device):
             all_preds = np.concatenate(all_preds, axis=0)
             all_labels = np.concatenate(all_labels, axis=0)
 
-            # TODO
             """
             # update current and last accuracies
             last_accuracy = np.copy(current_accuracy)
@@ -586,10 +581,6 @@ def test_run(device):
                 correct = np.sum(class_preds == i)
                 total = len(class_preds)
                 acc_matr[i, s] = (100.0 * correct/total)
-
-            with open(acc_per_class_file, 'a') as f:
-                row_data = ['-1' if c not in test_model.classes_map else str(acc_matr[test_model.classes_map[c], s]) for c in classes]
-                print(','.join(row_data), file=f)
 
             test_acc = np.mean(acc_matr[:test_model.n_known, s])
             print('%.2f ,' % test_acc, file=file)
