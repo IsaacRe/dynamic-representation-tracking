@@ -35,6 +35,8 @@ class iCIFAR10(CIFAR10):
         self.aug = args.aug
         # Number of frame at each learning exposure
         self.num_e_frames = args.lexp_len
+        # Whether to sample data with replacement
+        self.s_w_replace = args.sample_w_replacement
 
         # Select a subset of classes for incremental training and testing
         if self.train:
@@ -187,7 +189,7 @@ class iCIFAR10(CIFAR10):
                 self.curr_len = 0
                 self.e_maps = -np.ones((12*self.num_e_frames,2), dtype=np.int32) 
             for (gt_label, model_label) in zip(classes, model_classes):
-                rand = np.random.choice(500, self.num_e_frames, replace = True)
+                rand = np.random.choice(500, self.num_e_frames, replace = self.s_w_replace)
 
                 s_ind = np.where( \
                     np.array(self.all_train_labels) == gt_label)[0]

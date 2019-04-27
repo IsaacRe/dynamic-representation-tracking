@@ -104,6 +104,8 @@ parser.add_argument("--l_ch", default=0.1, type=float,
                     help="Color jittering : max lightness change")
 parser.add_argument("--aug", default="icarl", type=str,
                     help="Data augmentation to perform on train data")
+parser.add_argument("--s_wo_rep", dest="sample_w_replacement", action="store_false",
+                    help="Sampling train data with replacement")
 
 # System options
 parser.add_argument("--test_freq", default=1, type=int,
@@ -126,6 +128,8 @@ parser.set_defaults(jitter=True)
 parser.set_defaults(save_all=False)
 parser.set_defaults(resume=False)
 parser.set_defaults(one_gpu=False)
+parser.set_defaults(sample_w_replacement=True)
+
 
 
 # Print help if no arguments passed
