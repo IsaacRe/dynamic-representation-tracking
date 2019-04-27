@@ -14,7 +14,9 @@ from utils.model_utils import MultiClassCrossEntropyLoss
 import pdb
 
 class IncrNet(nn.Module):
-    def __init__(self, args, device):
+    def __init__(self, args, device, cifar=False):
+        #Task
+        self.cifar = cifar
         # Hyper Parameters
         self.init_lr = args.init_lr
         self.init_lr_ft = args.init_lr_ft
@@ -25,8 +27,11 @@ class IncrNet(nn.Module):
         self.llr_freq = args.llr_freq
         self.weight_decay = args.wd
         # Hardcoded
-        self.lower_rate_epoch = [
-            int(0.7 * self.num_epoch), int(0.9 * self.num_epoch)]
+        if not self.cifar:
+            self.lower_rate_epoch = [
+                int(0.7 * self.num_epoch), int(0.9 * self.num_epoch)]
+        else:
+            self.lower_rate_epoch = []
         self.momentum = 0.9
 
         self.pretrained = args.pretrained
@@ -69,14 +74,16 @@ class IncrNet(nn.Module):
         self.exemplar_sets = []
         # for each exemplar store which learning exposure it came from
         self.eset_le_maps = []
-        # store bounding boxes for all exemplars
-        self.exemplar_bbs = []
+        if not self.cifar:
+            # store bounding boxes for all exemplars
+            self.exemplar_bbs = []        
         # Boolean to store whether exemplar means need to be recomputed
         self.compute_means = True
         # Means of exemplars
         self.exemplar_means = []
 
         # sampling option
+
         self.sample = args.sample
 
         # exemplar as negative signals
@@ -141,9 +148,13 @@ class IncrNet(nn.Module):
         exemplar_means = []
         for y, P_y in enumerate(self.exemplar_sets):
             # normalize images
-            bbs = self.exemplar_bbs[y]
-            data_means = np.array([cv2.resize(mean_image[b[2]:b[3], b[0]:b[1]],\
-                (img_size, img_size)).transpose(2, 0, 1) for b in bbs])
+            if not self.cifar:
+                bbs = self.exemplar_bbs[y]
+                data_means = np.array([cv2.resize(mean_image[b[2]:b[3], b[0]:b[1]],\
+                    (img_size, img_size)).transpose(2, 0, 1) for b in bbs])
+            elif self.cifar:
+                
+                data_means = np.array([mean_image]*P_y.shape[0])
             P_y = (np.float32(P_y) - data_means)/255.
 
             # Concatenate with horizontally flipped images
@@ -328,14 +339,16 @@ class IncrNet(nn.Module):
             # Repeated exposure, or balanced finetuning for E2EIL
             self.exemplar_sets[cl] = np.array(images[indices_selected])
             self.eset_le_maps[cl] = np.array(le_maps[indices_selected])
-            self.exemplar_bbs[cl] = np.array(image_bbs[indices_selected])
+            if not self.cifar:
+                self.exemplar_bbs[cl] = np.array(image_bbs[indices_selected])
             if not overwrite:
                 self.n_occurrences[cl] += 1
         else:
             # New object exemplar set to be created
             self.exemplar_sets.append(np.array(images[indices_selected]))
             self.eset_le_maps.append(np.array(le_maps[indices_selected]))
-            self.exemplar_bbs.append(np.array(image_bbs[indices_selected]))
+            if not self.cifar:
+                self.exemplar_bbs.append(np.array(image_bbs[indices_selected]))
             self.n_occurrences.append(1)
 
     def reduce_exemplar_sets(self, m):
@@ -346,7 +359,8 @@ class IncrNet(nn.Module):
         for y, P_y in enumerate(self.exemplar_sets):
             self.exemplar_sets[y] = P_y[:m]
             self.eset_le_maps[y] = self.eset_le_maps[y][:m]
-            self.exemplar_bbs[y] = self.exemplar_bbs[y][:m]
+            if not self.cifar:
+                self.exemplar_bbs[y] = self.exemplar_bbs[y][:m]
 
     def combine_dataset_with_exemplars(self, dataset):
         '''
@@ -355,8 +369,11 @@ class IncrNet(nn.Module):
         for y, P_y in enumerate(self.exemplar_sets):
             exemplar_images = P_y
             exemplar_labels = [y] * len(P_y)
-            dataset.append(exemplar_images, exemplar_labels,
+            if not self.cifar:
+                dataset.append(exemplar_images, exemplar_labels,
                            self.exemplar_bbs[y], self.eset_le_maps[y])
+            else:
+                dataset.append(exemplar_images, exemplar_labels, self.eset_le_maps[y])
 
     def fetch_hyper_params(self):
         return {'num_epoch': self.num_epoch,
