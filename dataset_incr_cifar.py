@@ -33,7 +33,6 @@ class iCIFAR10(CIFAR10):
 
         self.img_size = args.img_size
         self.aug = args.aug
-        print("AUG ===>", self.aug == "e2e_full")
         # Number of frame at each learning exposure
         self.num_e_frames = args.lexp_len
 
@@ -58,11 +57,14 @@ class iCIFAR10(CIFAR10):
                                                dtype=np.bool_)
             if self.aug == "icarl" or self.aug == "e2e":
                 self.train_data, self.train_labels = [], [] 
+                # e_maps keeps track of new images in the current learning exposure with regard to images from the exemplar set
+                self.e_maps = -np.ones((self.num_e_frames,2), dtype=np.int32)
             elif self.aug == "e2e_full":
                 self.train_data, self.train_labels = np.zeros((12*self.num_e_frames,3,self.img_size,self.img_size), dtype=np.uint8), []
                 self.curr_len = 0
-            # e_maps keeps track of new images in the current learning exposure with regard to images from the exemplar set
-            self.e_maps = -np.ones((self.num_e_frames,2), dtype=np.int32)
+                self.e_maps = -np.ones((12*self.num_e_frames,2), dtype=np.int32)
+
+
         else:
             # Resize all test images
             resized_test_images = np.zeros((len(self.test_data), 3, \
@@ -108,7 +110,7 @@ class iCIFAR10(CIFAR10):
                 img = torch.FloatTensor(random_cropped)         
 
                 target = self.train_labels[index]
-            elif self.aug == 'e2e':
+            elif self.aug == "e2e":
                 # Augment : 
                 # For 3 choices - original image, brightness augmented 
                 # and contrast augmented
@@ -144,6 +146,12 @@ class iCIFAR10(CIFAR10):
                     curr_img = copy.deepcopy(curr_img[:, :, ::-1])
                 img = torch.FloatTensor(curr_img)
                 target = self.train_labels[index]
+            elif self.aug == "e2e_full":
+                img = self.train_data[index]
+                img = (img - self.mean_image)/255.
+                target = self.train_labels[index]
+
+
         else:
             img = self.test_data[index]
             img = (img - self.mean_image)/255.
@@ -172,7 +180,12 @@ class iCIFAR10(CIFAR10):
         if self.train:
             train_data = []
             train_labels = []
-            self.e_maps = -np.ones((self.num_e_frames,2), dtype=np.int32)
+            if self.aug == "icarl" or self.aug == "e2e":
+                self.e_maps = -np.ones((self.num_e_frames,2), dtype=np.int32)
+            elif self.aug == "e2e_full":
+                self.train_data, self.train_labels = np.zeros((12*self.num_e_frames,3,self.img_size,self.img_size), dtype=np.uint8), []
+                self.curr_len = 0
+                self.e_maps = -np.ones((12*self.num_e_frames,2), dtype=np.int32) 
             for (gt_label, model_label) in zip(classes, model_classes):
                 rand = np.random.choice(500, self.num_e_frames, replace = True)
 
@@ -188,8 +201,8 @@ class iCIFAR10(CIFAR10):
 
                 self.all_train_coverage[s_ind[rand]] = True
 
-                self.e_maps[:,0] = iteration
-                self.e_maps[:,1] = s_ind[rand]
+                self.e_maps[:self.num_e_frames,0] = iteration
+                self.e_maps[:self.num_e_frames,1] = s_ind[rand]
 
 
             if self.aug == "icarl" or self.aug == "e2e":
@@ -257,8 +270,8 @@ class iCIFAR10(CIFAR10):
             label : The requested label
         """
         return self.train_data[ \
-                    np.array(self.train_labels) == label], \
-                    self.e_maps[np.array(self.train_labels) == label]
+                    np.array(self.train_labels) == label][:self.num_e_frames], \
+                    self.e_maps[np.array(self.train_labels) == label][:self.num_e_frames]
 
     def append(self, images, labels, e_map_data):
         """Appends dataset with images, labels and frame data from exemplars
@@ -280,38 +293,45 @@ class iCIFAR10(CIFAR10):
         train_labels = []
         self.curr_len = self.num_e_frames
 
-        for i in range(len(self.train_data)):
+        for i in range(self.num_e_frames):
+            start_len = self.curr_len
             curr_img = self.train_data[i]
             ################### data augmentation ################
             # brightness
             brightness = np.random.randint(-63, 64)
-            b_curr_img = np.clip(curr_img + brightness, 0, 255)
-            self.train_data[self.curr_len] = b_curr_img
+            b_curr_img = np.clip(np.int32(curr_img) + brightness, 0, 255)
+            self.train_data[self.curr_len] = np.uint8(b_curr_img)
             self.curr_len+=1
 
             # contrast
             contrast = np.random.random() * (1.6+1e-16) + 0.2  # random from 0.2 to 1.8 inclusive
-            c_curr_img = np.clip((np.float32(curr_img) - curr_mean) * contrast + curr_mean, 0, 255)
-            self.train_data[self.curr_len] = c_curr_img
+            c_curr_img = np.clip((np.float32(curr_img) - self.mean_image) * contrast + self.mean_image, 0, 255)
+            self.train_data[self.curr_len] = np.uint8(c_curr_img)
             self.curr_len+=1
 
             # cropping
             crops = np.random.random_integers(0,high=8,size=(3,2))
-            padded = np.pad(self.train_data[self.num_e_frames:self.curr_len],((0,0),(0,0),(4,4),(4,4)),mode="constant")
-            self.train_data[self.curr_len:self.curr_len+len(padded)] = padded[:,crops[r,0]:(crops[r,0]+self.img_size),crops[r,1]:(crops[r,1]+self.img_size)]
-            self.curr_len+=len(padded)
+            padded = list(np.pad(self.train_data[start_len:self.curr_len],((0,0),(0,0),(4,4),(4,4)),mode="constant"))
+            padded.append(np.pad(curr_img, ((0,0),(4,4),(4,4)), mode="constant"))
+
+            padded = np.array(padded)
+            for r in range(len(padded)):
+                self.train_data[self.curr_len:self.curr_len+1] = padded[r,:,crops[r,0]:(crops[r,0]+self.img_size),crops[r,1]:(crops[r,1]+self.img_size)]
+                self.curr_len+=1
 
             # mirror
-            num_images_transformed = self.curr_len - self.num_e_frames
-            self.train_data[self.curr_len:self.curr_len+num_images_transformed] = self.train_data[self.num_e_frames:self.curr_len][:,:,:,::-1]
+            num_images_transformed = self.curr_len - start_len
+            self.train_data[self.curr_len:self.curr_len+num_images_transformed] = self.train_data[start_len:self.curr_len][:,:,:,::-1]
             self.curr_len += num_images_transformed
-
+            self.train_data[self.curr_len:self.curr_len+1] = curr_img[:,:,::-1]
+            self.curr_len += 1
             # normalize
-            for img in range(12):
+            for img in range(11):
                 ######################################################
 
                 self.train_labels.append(self.train_labels[i])
-                
+            self.e_maps[start_len:self.curr_len,0] = np.array([self.e_maps[i,0]]*11)
+            self.e_maps[start_len:self.curr_len,1] = np.array([self.e_maps[i,1]]*11)
 
 class iCIFAR100(iCIFAR10):
     base_folder = "cifar-100-python"
