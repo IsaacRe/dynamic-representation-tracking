@@ -88,6 +88,12 @@ parser.add_argument('--random_explr', dest='random_explr', action='store_true',
                     help='Option for random exemplar set')
 parser.add_argument('--loss', default='BCE', type=str,
                     help='Loss to be used in classification')
+parser.add_argument('--fix_explr_sets', action='store_true',
+                    help='Whether to keep exemplar set size fixed for all instances')
+parser.add_argument('--explrs_per_instance', default=3, type=int,
+                    help='Number of exemplars per instance if fixing')
+parser.add_argument('--debug', action='store_true',
+                    help='Whether to load data in the main process, for debugging in batch loop')
 
 # Training options
 parser.add_argument("--diff_order", dest="d_order", action="store_true",
@@ -158,7 +164,7 @@ test_freq = 1
 total_classes = args.total_classes
 num_iters = args.num_iters
 
-         
+"""
 # Conditional variable, shared vars for synchronization
 cond_var = mp.Condition()
 train_counter = mp.Value("i", 0)
@@ -166,6 +172,7 @@ test_counter = mp.Value("i", 0)
 dataQueue = mp.Queue()
 all_done = mp.Event()
 data_mgr = mp.Manager()
+"""
 
 if not os.path.exists("data_generator/cifar_mean_image.npy"):
     mean_image = None
@@ -339,7 +346,7 @@ def train_run(device):
         model.update_representation_icarl(train_set, \
                                           prev_model, \
                                           [model_curr_class_idx], \
-                                          args.num_workers)
+                                          0 if args.debug else args.num_workers)
         model.eval()
         del prev_model
         m = int(K / model.n_classes)
@@ -452,7 +459,7 @@ def test_run(device):
             test_model.eval()
             test_loader = torch.utils.data.DataLoader(test_set, 
                 batch_size=args.batch_size_test, shuffle=False, \
-                num_workers=args.num_workers, pin_memory=True)
+                num_workers=0 if args.debug else args.num_workers, pin_memory=True)
 
             print("%d, " % test_model.n_known, end="", file=file)
 
