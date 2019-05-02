@@ -98,6 +98,8 @@ parser.add_argument('--debug', action='store_true',
 # Training options
 parser.add_argument("--diff_order", dest="d_order", action="store_true",
                     help="Use a random order of classes introduced")
+parser.add_argument("--subset", dest="subset", action="store_true",
+                    help="Use a random subset of classes")
 parser.add_argument("--no_jitter", dest="jitter", action="store_false",
                     help="Option for no color jittering (for iCaRL)")
 parser.add_argument("--h_ch", default=0.02, type=float,
@@ -108,6 +110,8 @@ parser.add_argument("--l_ch", default=0.1, type=float,
                     help="Color jittering : max lightness change")
 parser.add_argument("--aug", default="icarl", type=str,
                     help="Data augmentation to perform on train data")
+parser.add_argument("--s_wo_rep", dest="sample_w_replacement", action="store_false",
+                    help="Sampling train data with replacement")
 
 # System options
 parser.add_argument("--test_freq", default=1, type=int,
@@ -125,10 +129,13 @@ parser.set_defaults(ncm=False)
 parser.set_defaults(dist=False)
 parser.set_defaults(pretrained=True)
 parser.set_defaults(d_order=False)
+parser.set_defaults(subset=False)
 parser.set_defaults(jitter=True)
 parser.set_defaults(save_all=False)
 parser.set_defaults(resume=False)
 parser.set_defaults(one_gpu=False)
+parser.set_defaults(sample_w_replacement=True)
+
 
 
 # Print help if no arguments passed
@@ -184,10 +191,13 @@ K = args.num_exemplars  # total number of exemplars
 model = IncrNet(args, device=train_device, cifar=True)
 
 # Randomly choose a subset of classes
-# perm_id = np.random.choice(100, total_classes, replace=False)
-
-# perm_id = np.random.permutation(total_classes)
-perm_id = np.arange(total_classes)
+if args.subset and args.d_order:
+    perm_id = np.random.choice(100, total_classes, replace=False)
+    perm_id = np.random.permutation(perm_id)
+elif args.d_order:
+    perm_id = np.random.permutation(total_classes)
+else:
+    perm_id = np.arange(total_classes)
 
 print ("perm_id:", perm_id)
 
@@ -207,10 +217,11 @@ if args.num_iters > args.total_classes:
         np.random.shuffle(perm_arr)
         np.save(perm_file, perm_arr)
 
-perm_id_all = np.load(perm_file) 
-for i in range(len(perm_id_all)):
-    perm_id_all[i] = perm_id[perm_id_all[i]]
-perm_id = perm_id_all
+    perm_id_all = np.load(perm_file) 
+    print("PERM ID ALL: ===>", perm_id_all)
+    for i in range(len(perm_id_all)):
+        perm_id_all[i] = perm_id[perm_id_all[i]]
+    perm_id = perm_id_all
 
 train_set = iCIFAR100(args, root="./data",
                              train=True,
