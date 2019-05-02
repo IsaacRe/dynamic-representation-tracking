@@ -11,8 +11,12 @@ from utils.loader_utils import CustomBatchSampler
 from utils.model_utils import kaiming_normal_init
 from utils.model_utils import MultiClassCrossEntropyLoss
 
+import pdb
+
 class IncrNet(nn.Module):
-    def __init__(self, args, device):
+    def __init__(self, args, device, cifar=False):
+        #Task
+        self.cifar = cifar
         # Hyper Parameters
         self.init_lr = args.init_lr
         self.init_lr_ft = args.init_lr_ft
@@ -23,8 +27,11 @@ class IncrNet(nn.Module):
         self.llr_freq = args.llr_freq
         self.weight_decay = args.wd
         # Hardcoded
-        self.lower_rate_epoch = [
-            int(0.7 * self.num_epoch), int(0.9 * self.num_epoch)]
+        if not self.cifar:
+            self.lower_rate_epoch = [
+                int(0.7 * self.num_epoch), int(0.9 * self.num_epoch)]
+        else:
+            self.lower_rate_epoch = []
         self.momentum = 0.9
 
         self.pretrained = args.pretrained
@@ -67,16 +74,29 @@ class IncrNet(nn.Module):
         self.exemplar_sets = []
         # for each exemplar store which learning exposure it came from
         self.eset_le_maps = []
-        # store bounding boxes for all exemplars
-        self.exemplar_bbs = []
+        if not self.cifar:
+            # store bounding boxes for all exemplars
+            self.exemplar_bbs = []        
         # Boolean to store whether exemplar means need to be recomputed
         self.compute_means = True
         # Means of exemplars
         self.exemplar_means = []
 
+        # sampling option
+
+        self.sample = args.sample
+
+        # exemplar as negative signals
+        self.explr_neg_sig = args.explr_neg_sig
+
         # Cross Entropy Loss functions
-        self.bce_loss = nn.BCELoss()
-        self.ce_loss = nn.CrossEntropyLoss()
+        self.loss = args.loss
+        if self.sample == 'gradient_iid':
+            self.bce_loss = nn.BCELoss(reduction='none')
+            self.ce_loss = nn.CrossEntropyLoss(reduction='none')
+        else:
+            self.bce_loss = nn.BCELoss()
+            self.ce_loss = nn.CrossEntropyLoss()
 
         # Temperature for cross entropy distillation loss
         self.T = 2
@@ -84,6 +104,10 @@ class IncrNet(nn.Module):
         # std for gradient noise adding
         self.std = np.array([np.sqrt(0.3/(epoch+2)**0.55) 
             for epoch in range(np.max([self.num_epoch, self.num_epoch_ft]))])
+
+        # random exemplar option
+        self.random_exemplar = args.random_explr
+
         
     def forward(self, x):
         x = self.feature_extractor(x)
@@ -124,9 +148,13 @@ class IncrNet(nn.Module):
         exemplar_means = []
         for y, P_y in enumerate(self.exemplar_sets):
             # normalize images
-            bbs = self.exemplar_bbs[y]
-            data_means = np.array([cv2.resize(mean_image[b[2]:b[3], b[0]:b[1]],\
-                (img_size, img_size)).transpose(2, 0, 1) for b in bbs])
+            if not self.cifar:
+                bbs = self.exemplar_bbs[y]
+                data_means = np.array([cv2.resize(mean_image[b[2]:b[3], b[0]:b[1]],\
+                    (img_size, img_size)).transpose(2, 0, 1) for b in bbs])
+            elif self.cifar:
+                
+                data_means = np.array([mean_image]*P_y.shape[0])
             P_y = (np.float32(P_y) - data_means)/255.
 
             # Concatenate with horizontally flipped images
@@ -235,86 +263,92 @@ class IncrNet(nn.Module):
                        being constructed after finetuning (not a repeated 
                        exposure) 
         '''
-        num_new_imgs = np.sum(le_maps[:, 0] == curr_iter)
-        num_old_imgs = len(images) - num_new_imgs
-        all_features = []
+        if not self.random_exemplar:
+            num_new_imgs = np.sum(le_maps[:, 0] == curr_iter)
+            num_old_imgs = len(images) - num_new_imgs
+            all_features = []
 
-        # Normalize images
-        normalized_images = (np.float32(images) - image_means)/255.
+            # Normalize images
+            normalized_images = (np.float32(images) - image_means)/255.
 
-        # Batch up images to fit on GPU memory
-        for i in range(0, len(images), self.batch_size):
-            with torch.no_grad():
-                img_tensors = Variable(torch.FloatTensor(
-                    normalized_images[i:min(i+self.batch_size, len(images))])
-                                       ).cuda(device=self.device)
+            # Batch up images to fit on GPU memory
+            for i in range(0, len(images), self.batch_size):
+                with torch.no_grad():
+                    img_tensors = Variable(torch.FloatTensor(
+                        normalized_images[i:min(i+self.batch_size, len(images))])
+                                           ).cuda(device=self.device)
 
-            # Get features
-            features = self.feature_extractor(img_tensors)
-            del img_tensors
-            
-            # Normalize features
-            features_norm = features.data.norm(p=2, dim=1) + self.epsilon
-            features_norm = features_norm.unsqueeze(1)
-            features.data = features.data.div(
-                features_norm.expand_as(features))  # Normalize
-            features.data = features.data.squeeze(3)
-            features.data = features.data.squeeze(2)
-            features = features.data.cpu().numpy()
+                # Get features
+                features = self.feature_extractor(img_tensors)
+                del img_tensors
+                
+                # Normalize features
+                features_norm = features.data.norm(p=2, dim=1) + self.epsilon
+                features_norm = features_norm.unsqueeze(1)
+                features.data = features.data.div(
+                    features_norm.expand_as(features))  # Normalize
+                features.data = features.data.squeeze(3)
+                features.data = features.data.squeeze(2)
+                features = features.data.cpu().numpy()
 
-            all_features.append(features)
+                all_features.append(features)
 
-        features = np.concatenate(all_features, axis=0)
+            features = np.concatenate(all_features, axis=0)
 
-        # Weight of images for computing mean while herding
-        # New (images from new learning exposure) and 
-        # old images (from old exemplars) are weighed 
-        # in the inverse ratio of their numbers 
-        weights = np.zeros((len(features), 1))
-        weights[le_maps[:, 0] == curr_iter] = float(
-            num_old_imgs + 1)/(num_old_imgs + num_new_imgs + 1)
-        weights[le_maps[:, 0] != curr_iter] = float(
-            num_new_imgs + 1)/(num_old_imgs + num_new_imgs + 1)
+            # Weight of images for computing mean while herding
+            # New (images from new learning exposure) and 
+            # old images (from old exemplars) are weighed 
+            # in the inverse ratio of their numbers 
+            weights = np.zeros((len(features), 1))
+            weights[le_maps[:, 0] == curr_iter] = float(
+                num_old_imgs + 1)/(num_old_imgs + num_new_imgs + 1)
+            weights[le_maps[:, 0] != curr_iter] = float(
+                num_new_imgs + 1)/(num_old_imgs + num_new_imgs + 1)
 
-        class_mean = np.sum(weights * features, axis=0)/np.sum(weights)
-        class_mean = class_mean / \
-            (np.linalg.norm(class_mean) + self.epsilon)  # Normalize
+            class_mean = np.sum(weights * features, axis=0)/np.sum(weights)
+            class_mean = class_mean / \
+                (np.linalg.norm(class_mean) + self.epsilon)  # Normalize
 
-        indices_remaining = np.arange(0, len(images))
-        indices_selected = []
+            indices_remaining = np.arange(0, len(images))
+            indices_selected = []
 
-        # Herding procedure : Algorithm 4 in 
-        # https://arxiv.org/pdf/1611.07725.pdf (Rebuffi et al.)
-        for k in range(m):
-            if len(indices_remaining) == 0:
-                break
+            # Herding procedure : Algorithm 4 in 
+            # https://arxiv.org/pdf/1611.07725.pdf (Rebuffi et al.)
+            for k in range(m):
+                if len(indices_remaining) == 0:
+                    break
 
-            if len(indices_selected) > 0:
-                S = np.sum(features[np.array(indices_selected)], axis=0)
-            else:
-                S = 0
+                if len(indices_selected) > 0:
+                    S = np.sum(features[np.array(indices_selected)], axis=0)
+                else:
+                    S = 0
 
-            phi = features[indices_remaining]
-            mu = class_mean
-            mu_p = 1.0/(k+1) * (phi + S)
-            mu_p = mu_p / (np.linalg.norm(mu_p) + self.epsilon)
-            i = np.argmin(np.sqrt(np.sum((mu - mu_p) ** 2, axis=1)))
+                phi = features[indices_remaining]
+                mu = class_mean
+                mu_p = 1.0/(k+1) * (phi + S)
+                mu_p = mu_p / (np.linalg.norm(mu_p) + self.epsilon)
+                i = np.argmin(np.sqrt(np.sum((mu - mu_p) ** 2, axis=1)))
 
-            indices_selected.append(indices_remaining[i])
-            indices_remaining = np.delete(indices_remaining, i, axis=0)
+                indices_selected.append(indices_remaining[i])
+                indices_remaining = np.delete(indices_remaining, i, axis=0)
+        elif self.random_exemplar:
+            indices_selected = np.random.choice(len(images),min(len(images),m),replace=False)
+
 
         if cl < self.n_known or overwrite:
             # Repeated exposure, or balanced finetuning for E2EIL
             self.exemplar_sets[cl] = np.array(images[indices_selected])
             self.eset_le_maps[cl] = np.array(le_maps[indices_selected])
-            self.exemplar_bbs[cl] = np.array(image_bbs[indices_selected])
+            if not self.cifar:
+                self.exemplar_bbs[cl] = np.array(image_bbs[indices_selected])
             if not overwrite:
                 self.n_occurrences[cl] += 1
         else:
             # New object exemplar set to be created
             self.exemplar_sets.append(np.array(images[indices_selected]))
             self.eset_le_maps.append(np.array(le_maps[indices_selected]))
-            self.exemplar_bbs.append(np.array(image_bbs[indices_selected]))
+            if not self.cifar:
+                self.exemplar_bbs.append(np.array(image_bbs[indices_selected]))
             self.n_occurrences.append(1)
 
     def reduce_exemplar_sets(self, m):
@@ -325,7 +359,8 @@ class IncrNet(nn.Module):
         for y, P_y in enumerate(self.exemplar_sets):
             self.exemplar_sets[y] = P_y[:m]
             self.eset_le_maps[y] = self.eset_le_maps[y][:m]
-            self.exemplar_bbs[y] = self.exemplar_bbs[y][:m]
+            if not self.cifar:
+                self.exemplar_bbs[y] = self.exemplar_bbs[y][:m]
 
     def combine_dataset_with_exemplars(self, dataset):
         '''
@@ -334,8 +369,11 @@ class IncrNet(nn.Module):
         for y, P_y in enumerate(self.exemplar_sets):
             exemplar_images = P_y
             exemplar_labels = [y] * len(P_y)
-            dataset.append(exemplar_images, exemplar_labels,
+            if not self.cifar:
+                dataset.append(exemplar_images, exemplar_labels,
                            self.exemplar_bbs[y], self.eset_le_maps[y])
+            else:
+                dataset.append(exemplar_images, exemplar_labels, self.eset_le_maps[y])
 
     def fetch_hyper_params(self):
         return {'num_epoch': self.num_epoch,
@@ -367,7 +405,15 @@ class IncrNet(nn.Module):
         # Form combined training set
         if self.algo == 'icarl':
             self.combine_dataset_with_exemplars(dataset)
-        
+
+        # if self.sample == 'minibatch_sampling':
+        #     weights = dataset.get_class_weights()
+        # else:
+        #     weights = None
+
+        if self.sample == 'minibatch_sampling_inflate':
+        	dataset.inflate_dataset()
+
         sampler = CustomRandomSampler(dataset, self.num_epoch, num_workers)
         batch_sampler = CustomBatchSampler(
             sampler, self.batch_size, drop_last=False, epoch_size=len(dataset))
@@ -427,6 +473,21 @@ class IncrNet(nn.Module):
                         q[pos_indices, pos_labels] = 1
 
                 loss = self.bce_loss(g, q[:len(labels)])
+
+                if self.sample == 'gradient_iid':
+                    # loss has reduction='none'
+                    if self.loss == 'BCE':
+                        loss = torch.mean(loss, dim=1)
+                    if self.n_classes == 1 or not self.explr_neg_sig:
+                        freqs = torch.bincount(labels+1) #So -1 gets to 0
+                    else:
+                        freqs = torch.bincount(labels)
+                    # batch_size/weight instead of 1/weight so gradients don't 
+                    # get too small
+                    # print(freqs)
+                    weights = self.batch_size/(freqs[labels].float())
+                    loss = torch.mean(loss * weights)
+
                 loss.backward()
                 optimizer.step()
 
@@ -530,9 +591,31 @@ class IncrNet(nn.Module):
                     loss = dist_loss*self.T*self.T + cls_loss 
                 else:
                     loss = cls_loss
+
+                if self.sample == 'gradient_iid':
+                    # loss has reduction='none'
+                    if self.loss == 'BCE' or self.n_classes == 1:
+                        loss = torch.mean(loss, dim=1)
+                    if self.n_classes == 1:
+                        freqs = torch.bincount(labels+1) #So -1 gets to 0
+                    else:
+                        freqs = torch.bincount(labels)
+                    # batch_size/weight instead of 1/weight so gradients don't 
+                    # get too small
+                    # print(freqs)
+                    weights = self.batch_size/(freqs[labels].float())
+                    loss = torch.mean(loss * weights)
                 
                 loss.backward()
-                
+                # loss.backward(retain_graph=True)
+                # get the grads for each layer (dL/dW)
+                # grads = torch.autograd.grad(loss, self.parameters())
+                # # add noise to the grads
+                # # dL/dW += N(0, std_e)
+                # for p in grads:
+                #     p.data.add_(torch.cuda.FloatTensor(
+                #         p.shape, device=self.device).normal_(std=self.std[epoch]))
+
                 optimizer.step()
                 tqdm.write('Epoch [%d/%d], Minibatch [%d/%d] Loss: %.4f'
                            % ((epoch+1), num_epoch, i % num_batches_per_epoch+1, 

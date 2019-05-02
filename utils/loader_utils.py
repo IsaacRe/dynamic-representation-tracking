@@ -15,18 +15,23 @@ class CustomRandomSampler(Sampler):
         num_workers (int) : Number of workers to use for generating iterator
     '''
 
-    def __init__(self, data_source, num_epochs, num_workers):
+    def __init__(self, data_source, num_epochs, num_workers, weights=None, replacement=True):
         self.data_source = data_source
         self.num_epochs = num_epochs
         self.num_workers = num_workers
         self.datalen = len(data_source)
+        self.weights = weights
+        self.replacement = replacement
 
     def __iter__(self):
         iter_array = []
         pool = ThreadPool(self.num_workers)
 
         def get_randperm(i):
-            return torch.randperm(self.datalen).tolist()
+            if self.weights is None:
+                return torch.randperm(self.datalen).tolist()
+            # self.weights = torch.tensor(self.weights, dtype=torch.double)
+            return torch.multinomial(torch.tensor(self.weights, dtype=torch.double), self.datalen, self.replacement).tolist()
         iter_array = list(itertools.chain.from_iterable(
             pool.map(get_randperm, range(self.num_epochs))))
         pool.close()
