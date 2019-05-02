@@ -10,18 +10,21 @@ import pandas as pd
 parser = argparse.ArgumentParser(description='Incremental learning')
 parser.add_argument('-f', '--files', type=str, nargs='+', required=True,
                     help='CSV file name containing results')
-parser.add_argument('--type', type=str, default='single', choices=['single', 'multi', 'class', 'expanded', 'hist'], nargs='+',
+parser.add_argument('--type', type=str, default='single',
+                    choices=['single', 'multi', 'class', 'forget', 'expanded', 'hist'], nargs='+',
                     help='Type of plot to make: single=test accuracy from single file; multi=test accuracy from several'
                          'files; class=test accuracy per class for single file')
-parser.add_argument('--experiment_id', type=str, default='CRIB Toys-50',
+parser.add_argument('--experiment_id', type=str, default='Cifar 20',
                     help='Describe the experiment whose results are being plotted')
 
 # Class Accuracy Args
-parser.add_argument('--smoothing_margin', type=int, default=3,
+parser.add_argument('--smoothing_margin', type=int, default=0,
                     help='Temporal margin over which to average class accuracies')
 parser.add_argument('--n_classes', type=int, default=5, help='Number of classes to display')
 parser.add_argument('--range', type=int, nargs=2, default=[0, 20],
                     help='Specify the margin to plot')
+parser.add_argument('--choose_by', type=str, choices=['acc', 'first', 'random'],
+                    help='How to select classes to plot from entire class list')
 
 # Accuracy Histogram Args
 parser.add_argument('--n_bins', type=int, default=50, help="Number of bins in the histogram")
@@ -45,9 +48,10 @@ def hist_class_exposure_distance(args):
         raise Exception('Results file path not found')
 
     # Load results from files
-    classes_file = '%s-classes.npz' % os.path.splitext(datafile)[0]
-    info_classes = np.load(classes_file)
-    classes = info_classes['classes_seen']
+    classes = np.load('%s-coverage.npz' % os.path.splitext(datafile)[0])['classes_seen']
+    model_classes = np.load('%s-coverage.npz' % os.path.splitext(datafile)[0])['model_classes_seen']
+    matr_file = '%s-matr.npz' % os.path.splitext(datafile)[0]
+    info_matr = np.load(matr_file)
 
     idxs = {}
     for i, c in enumerate(classes):
@@ -75,7 +79,7 @@ def hist_final_class_accs(args):
     os.makedirs('results', exist_ok=True)
     filename = 'results/%s-histogram-class-accs.pdf' % datafile.split('.')[0].split('/')[-1]
 
-    plt.title(args.experiment_id + ' Class Acc. after Training')
+    plt.title(args.experiment_id)
 
     axis.set_xlabel('% Test accuracy')
     axis.hist(acc_matr[:, -1], args.n_bins)
@@ -93,17 +97,16 @@ def plot_class_accs(args):
         raise Exception('Results file path not found')
 
     # Load results from files
-    classes_file = '%s-classes.npz' % os.path.splitext(datafile)[0]
+    classes = np.load('%s-coverage.npz' % os.path.splitext(datafile)[0])['classes_seen']
+    model_classes = np.load('%s-coverage.npz' % os.path.splitext(datafile)[0])['model_classes_seen']
     matr_file = '%s-matr.npz' % os.path.splitext(datafile)[0]
-    info_classes = np.load(classes_file)
     info_matr = np.load(matr_file)
 
-    classes = info_classes['classes_seen']
-    model_classes = info_classes['model_classes_seen']
     classes = classes[args.range[0]:args.range[1]]
     model_classes = model_classes[args.range[0]:args.range[1]]
     # get indices for referencing accuracies in acc_matr
     class_idxs = {c: model_classes[list(classes).index(c)] for c in classes}
+    info_matr.allow_pickle = True
     num_classes = info_matr['args'][()].total_classes
     num_le = len(classes) # Number of learning exposures
 
@@ -150,7 +153,16 @@ def plot_class_accs(args):
     print(test_acc)
 
     classes_set = list(set(classes))
-    plot_classes = [classes_set[i] for i in np.random.randint(0, len(classes_set) - 1, args.n_classes)]
+    model_classes_set = list(set(model_classes))
+    final_acc = list(acc_matr[:,-1])
+    sorted_acc = sorted(final_acc)
+    if args.choose_by == 'acc':
+        plot_classes = [c for c in classes_set if final_acc[c] in sorted_acc[:num_classes//2] +
+                        sorted_acc[-num_classes//2:]]
+    elif args.choose_by == 'first':
+        plot_classes = sorted(model_classes_set[args.n_classes::-1])
+    elif args.choose_by == 'random':
+        plot_classes = [classes_set[i] for i in np.random.randint(0, len(classes_set) - 1, args.n_classes)]
 
     all_lines.append(ax2.plot(np.arange(0, num_le), counter, color='purple',
                               linestyle=':', linewidth=dotted_line_width,
@@ -159,7 +171,7 @@ def plot_class_accs(args):
                               label='Average across seen classes', linestyle='-')[0])
     # Color background space by exposure class
     exposure_colors = {}
-    bars = ax1.bar(np.arange(num_le - 1), np.array([100.0] * (num_le - 1)), width=1.0, align='edge', alpha=0.5)
+    bars = ax1.bar(np.arange(-1, num_le - 1), np.array([100.0] * num_le), width=1.0, align='edge', alpha=0.5)
     for c in classes_set:
         if c in plot_classes:
             last_plot = ax1.plot(np.arange(0, num_le), acc_matr[class_idxs[c]], label='%s Accuracy' % c, linestyle='-')[0]
@@ -167,15 +179,15 @@ def plot_class_accs(args):
             exposure_colors[c] = last_plot.get_color()
         else:
             exposure_colors[c] = 'white'
-    for i, c in enumerate(classes[1:]):
+    for i, c in enumerate(classes):
         # only display class names if there are few enough learning exposures for them to be legible
-        if args.n_classes < 30:
+        if args.range[1] - args.range[0] < 30:
             ax1.text(i, 0, c, {'ha': 'left', 'va': 'bottom', 'bbox': {'fc': '0.8', 'pad': 0.2}}, rotation=20)
         # get first index of class to use for indexing class_graphs
         bars[i].set_color(exposure_colors[c])
 
     all_labels = [l.get_label() for l in all_lines]
-    plt.title(args.experiment_id + ' Class Acc. after Training')
+    plt.title(args.experiment_id)
     ax1.legend(all_lines, all_labels, bbox_to_anchor=anchor,
                loc=2, borderaxespad=0., fancybox=True, framealpha=0.7,
                fontsize=18, numpoints=1)
@@ -184,91 +196,6 @@ def plot_class_accs(args):
     plt.savefig(filename, dpi=300, bbox_inches='tight',
                 pad_inches=0.01 ,transparent=True)
 
-"""
-def plot_class_accs(args):
-    datafile = args.files[0]
-    fig, ax1 = plt.subplots()
-    if not os.path.exists(datafile):
-        raise Exception('Results file path not found')
-
-    # Load results from files
-    classes_file = '%s-classes.npz' % os.path.splitext(datafile)[0]
-    matr_file = '%s-matr.npz' % os.path.splitext(datafile)[0]
-    info_classes = np.load(classes_file)
-    info_matr = np.load(matr_file)
-
-    classes = info_classes['classes_seen']
-    model_classes = info_classes['model_classes_seen']
-    # get indices for referencing accuracies in acc_matr
-    class_idxs = {c: model_classes[list(classes).index(c)] for c in classes}
-    num_classes = info_matr['args'][()].total_classes
-    num_le = len(classes) # Number of learning exposures
-
-    os.makedirs('results', exist_ok=True)
-    filename = 'results/plot-classes.pdf'
-    linestyle = '-'
-    all_lines = []
-
-    ax1.set_xlabel('Number of learning exposures')
-    ax1.set_ylabel('% Test accuracy over seen objects')
-    ax1.set_yticks(np.arange(0, 105, 10))
-    ax1.set_ylim([0, 105])
-
-    ax2 = ax1.twinx()
-    ax2.set_ylim([0,1.05*num_classes])
-    ax2.set_ylabel('Unique objects seen (UOS)')
-    ax2.set_yticks(np.arange(0, num_classes+1, num_classes//10))
-
-    plt.xticks(np.arange(0, num_le+1, num_le//10))
-    ax1.set_yticks(np.arange(0, 101, 10))
-    ax1.grid()
-
-    acc_matr = info_matr['acc_matr']
-    counter = []
-    cnt = 0
-    for i in range(len(classes)):
-        if classes[i] in classes[:i]:
-            counter.append(cnt)
-        else:
-            cnt += 1
-            counter.append(cnt)
-
-    # Smooth by averaging over a margin
-    def smooth(matr):
-        n = args.smoothing_margin
-        for i in range(num_le):
-            matr[:, i] = np.mean(matr[:, max(0, i - n):min(num_le - 1, i + n)], axis=1)
-        return matr
-
-    if args.smoothing_margin > 0:
-        acc_matr = smooth(acc_matr)
-
-    test_acc = np.sum(acc_matr, axis=0) / np.array(counter)
-    print(test_acc)
-
-    classes_set = list(set(classes))
-    plot_classes = [classes_set[i] for i in np.random.randint(0, len(classes_set), args.n_classes)]
-
-    all_lines.append(ax2.plot(np.arange(0, num_le), counter, color='purple',
-                              linestyle=':', linewidth=dotted_line_width,
-                              label='Ground-truth UOS')[0])
-    all_lines.append(ax1.plot(np.arange(0, num_le), test_acc, color='blue',
-                              label='Average across seen classes', linestyle='-')[0])
-    for c in plot_classes:
-        all_lines.append(ax1.plot(np.arange(0, num_le), acc_matr[class_idxs[c]],
-                                  label='%s Accuracy' % c, linestyle='-')[0])
-
-
-    all_labels = [l.get_label() for l in all_lines]
-    plt.title(title)
-    ax1.legend(all_lines, all_labels, bbox_to_anchor=anchor,
-               loc=2, borderaxespad=0., fancybox=True, framealpha=0.7,
-               fontsize=18, numpoints=1)
-
-    plt.gcf().set_size_inches(16, 8)
-    plt.savefig(filename, dpi=300, bbox_inches='tight',
-                pad_inches=0.01 ,transparent=True)
-"""
 
 # TODO debug
 def plot_accs(args):
@@ -279,14 +206,13 @@ def plot_accs(args):
             raise Exception('Results file path not found')
 
     # Load results from files
-    classes_file = '%s-classes.npz' % os.path.splitext(datafile)[0]
-    info_classes = np.load(classes_file)
-    info_matr = []
+    classes = np.load('%s-coverage.npz' % os.path.splitext(datafile)[0])['classes_seen']
+    matr_file = '%s-matr.npz' % os.path.splitext(datafile)[0]
+    info_matr = np.load(matr_file)
     for datafile in datafiles:
         matr_file = '%s-matr.npz' % os.path.splitext(datafile)[0]
         info_matr += [np.load(matr_file)]
 
-    classes = info_classes['classes_seen']
     num_classes = info_matr[0]['args'][()].total_classes
     num_le = len(classes) # Number of learning exposures
     
@@ -348,12 +274,11 @@ def plot_acc(args):
         raise Exception('Results file path not found')
 
     # Load results from files
-    classes_file = '%s-classes.npz' % os.path.splitext(datafile)[0]
+    classes = np.load('%s-coverage.npz' % os.path.splitext(datafile)[0])['classes_seen']
     matr_file = '%s-matr.npz' % os.path.splitext(datafile)[0]
-    info_classes = np.load(classes_file)
     info_matr = np.load(matr_file)
 
-    classes = info_classes['classes_seen']
+    info_matr.allow_pickle = True
     num_classes = info_matr['args'][()].total_classes
     num_le = len(classes) # Number of learning exposures
 
@@ -407,6 +332,60 @@ def plot_acc(args):
                 pad_inches=0.01 ,transparent=True)
 
 
+def plot_class_forget(args):
+    datafile = args.files[0]
+    fig, ax1 = plt.subplots()
+    if not os.path.exists(datafile):
+        raise Exception('Results file path not found')
+
+    # Load results from files
+    coverage_file = '%s-coverage.npz' % os.path.splitext(datafile)[0]
+    classes = np.load(coverage_file)['model_classes_seen']
+    matr_file = '%s-matr.npz' % os.path.splitext(datafile)[0]
+    info_matr = np.load(matr_file)
+
+    info_matr.allow_pickle = True
+    num_classes = info_matr['args'][()].total_classes
+    acc_matr = info_matr['acc_matr']
+    num_le = len(classes)
+
+    os.makedirs('results', exist_ok=True)
+    filename = 'results/%s-forgets.pdf' % datafile.split('.')[0].split('/')[-1]
+    linestyle = '-'
+    all_lines = []
+
+    ax1.set_xlabel('Number of learning exposures')
+    ax1.set_ylabel('% Test accuracy over seen objects')
+    ax1.set_yticks(np.arange(0, 105, 10))
+    ax1.set_ylim([0, 105])
+
+    plt.xticks(np.arange(0, num_le+1, num_le//10))
+    ax1.set_yticks(np.arange(0, 101, 10))
+    ax1.grid()
+
+    class_indices = [(k, [i for i, c in enumerate(classes) if c == k]) for k in range(num_classes)]
+    forget_ranges = []
+    for c, l in class_indices:
+        for i in l:
+            forget_ranges += [(i, acc_matr[c, i:i+num_classes])]
+
+    for i, f in forget_ranges:
+        if f.shape[0] < num_classes:
+            continue
+        last_plot = ax1.plot(np.arange(0, num_classes), f, linestyle='-')[0]
+        last_plot.set_color((i / num_le, 0.0, (num_le - i) / num_le))
+
+    all_labels = [l.get_label() for l in all_lines]
+    plt.title(args.experiment_id + ' Repeated Exposure')
+    ax1.legend(all_lines, all_labels, bbox_to_anchor=anchor,
+               loc=2, borderaxespad=0., fancybox=True, framealpha=0.7,
+               fontsize=18, numpoints=1)
+
+    plt.gcf().set_size_inches(16, 8)
+    plt.savefig(filename, dpi=300, bbox_inches='tight',
+                pad_inches=0.01 ,transparent=True)
+
+
 if __name__ == '__main__':
     args = parser.parse_args()
     if 'single' in args.type:
@@ -417,3 +396,5 @@ if __name__ == '__main__':
         plot_class_accs(args)
     if 'hist' in args.type:
         hist_final_class_accs(args)
+    if 'forget' in args.type:
+        plot_class_forget(args)
