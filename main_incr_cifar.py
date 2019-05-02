@@ -167,7 +167,6 @@ test_freq = 1
 total_classes = args.total_classes
 num_iters = args.num_iters
 
-         
 # Conditional variable, shared vars for synchronization
 cond_var = mp.Condition()
 train_counter = mp.Value("i", 0)
@@ -242,13 +241,16 @@ exemplar_data = []  # Exemplar set information stored by the model
 # learning exposure.
 
 # Conditional variable, shared memory for synchronization
+"""
 cond_var = mp.Condition()
 train_counter = mp.Value("i", 0)
 test_counter = mp.Value("i", 0)
 dataQueue = mp.Queue()
 all_done = mp.Event()
 data_mgr = mp.Manager()
+"""
 expanded_classes = data_mgr.list([None for i in range(args.test_freq)])
+
 
 if args.resume:
     print("resuming model from %s-model.pth.tar" %
