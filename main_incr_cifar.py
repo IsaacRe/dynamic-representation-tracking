@@ -116,6 +116,8 @@ parser.add_argument("--num_workers", default=8, type=int,
                          "stage of execution")
 parser.add_argument("--one_gpu", dest="one_gpu", action="store_true",
                     help="Option to run multiprocessing on 1 GPU")
+parser.add_argument("--debug", action='store_true',
+                    help="Set DataLoaders to num_workers=0 for debugging in data iteration loop")
 
 
 parser.set_defaults(pre_augment=False)
@@ -463,7 +465,7 @@ def test_run(device):
             test_model.eval()
             test_loader = torch.utils.data.DataLoader(test_set, 
                 batch_size=args.batch_size_test, shuffle=False, \
-                num_workers=args.num_workers, pin_memory=True)
+                num_workers=0 if args.debug else args.num_workers, pin_memory=True)
 
             print("%d, " % test_model.n_known, end="", file=file)
 

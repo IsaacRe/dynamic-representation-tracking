@@ -15,6 +15,7 @@ import pdb
 
 class IncrNet(nn.Module):
     def __init__(self, args, device, cifar=False):
+        self.debug = args.debug
         #Task
         self.cifar = cifar
         # Hyper Parameters
@@ -421,7 +422,7 @@ class IncrNet(nn.Module):
         
         # Run network training
         loader = torch.utils.data.DataLoader(
-            dataset, batch_sampler=batch_sampler, num_workers=num_workers, 
+            dataset, batch_sampler=batch_sampler, num_workers=0 if self.debug else num_workers,
             pin_memory=True)
 
         print("Length of current data + exemplars : ", len(dataset))
@@ -531,7 +532,7 @@ class IncrNet(nn.Module):
         # Run network training
         loader = torch.utils.data.DataLoader(dataset, 
                                              batch_sampler=batch_sampler, 
-                                             num_workers=num_workers, 
+                                             num_workers=0 if self.debug else num_workers,
                                              pin_memory=True)
 
         print("Length of current data + exemplars : ", len(dataset))
