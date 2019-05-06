@@ -6,6 +6,7 @@ from PIL import Image
 import cv2
 import time
 import copy
+from collections import Counter
 
 class iCIFAR10(CIFAR10):
     def __init__(self, args, root, classes,
@@ -37,6 +38,7 @@ class iCIFAR10(CIFAR10):
         self.num_e_frames = args.lexp_len
         # Whether to sample data with replacement
         self.s_w_replace = args.sample_w_replacement
+        self.num_exemplars = args.num_exemplars
 
         # Select a subset of classes for incremental training and testing
         if self.train:
@@ -62,9 +64,10 @@ class iCIFAR10(CIFAR10):
                 # e_maps keeps track of new images in the current learning exposure with regard to images from the exemplar set
                 self.e_maps = -np.ones((self.num_e_frames,2), dtype=np.int32)
             elif self.aug == "e2e_full":
-                self.train_data, self.train_labels = np.zeros((12*self.num_e_frames,3,self.img_size,self.img_size), dtype=np.uint8), []
+                self.train_data, self.train_labels = np.zeros((12*(self.num_e_frames+self.num_exemplars),3,self.img_size,self.img_size), dtype=np.uint8), []
                 self.curr_len = 0
-                self.e_maps = -np.ones((12*self.num_e_frames,2), dtype=np.int32)
+                self.curr_orig_len = 0
+                self.e_maps = -np.ones((12*(self.num_e_frames+self.num_exemplars),2), dtype=np.int32)
 
 
         else:
@@ -167,7 +170,10 @@ class iCIFAR10(CIFAR10):
 
     def __len__(self):
         if self.train:
-            return len(self.train_data)
+            if self.aug == "icarl" or self.aug == "e2e":
+                return len(self.train_data)
+            elif self.aug == "e2e_full":
+                return self.curr_len
         else:
             return len(self.test_data)
 
@@ -185,9 +191,9 @@ class iCIFAR10(CIFAR10):
             if self.aug == "icarl" or self.aug == "e2e":
                 self.e_maps = -np.ones((self.num_e_frames,2), dtype=np.int32)
             elif self.aug == "e2e_full":
-                self.train_data, self.train_labels = np.zeros((12*self.num_e_frames,3,self.img_size,self.img_size), dtype=np.uint8), []
+                self.train_data, self.train_labels = np.zeros((12*(self.num_e_frames+self.num_exemplars),3,self.img_size,self.img_size), dtype=np.uint8), []
                 self.curr_len = 0
-                self.e_maps = -np.ones((12*self.num_e_frames,2), dtype=np.int32) 
+                self.e_maps = -np.ones((12*(self.num_e_frames+self.num_exemplars),2), dtype=np.int32) 
             for (gt_label, model_label) in zip(classes, model_classes):
                 rand = np.random.choice(500, self.num_e_frames, replace = self.s_w_replace)
 
@@ -218,7 +224,7 @@ class iCIFAR10(CIFAR10):
                 self.train_labels = np.concatenate(np.array(train_labels, \
                     dtype=np.int32), axis=0).tolist()
                 self.curr_len = self.num_e_frames
-                self.get_augmented_set()
+                self.curr_orig_len = self.num_e_frames
 
 
     def expand(self, model_new_classes, gt_new_classes):
@@ -271,9 +277,13 @@ class iCIFAR10(CIFAR10):
         Args:
             label : The requested label
         """
+        if self.aug == "e2e_full":
+            return self.train_data[:self.curr_orig_len][ \
+                        np.array(self.train_labels)[:self.curr_orig_len] == label], \
+                        self.e_maps[:self.curr_orig_len][np.array(self.train_labels)[:self.curr_orig_len] == label]
         return self.train_data[ \
-                    np.array(self.train_labels) == label][:self.num_e_frames], \
-                    self.e_maps[np.array(self.train_labels) == label][:self.num_e_frames]
+                    np.array(self.train_labels) == label], \
+                    self.e_maps[np.array(self.train_labels) == label]
 
     def append(self, images, labels, e_map_data):
         """Appends dataset with images, labels and frame data from exemplars
@@ -283,9 +293,37 @@ class iCIFAR10(CIFAR10):
             labels: list of labels
             e_map_data: frame data of exemplars
         """
-        self.train_data = np.concatenate((self.train_data, images), axis=0)
-        self.train_labels = self.train_labels + labels
-        self.e_maps = np.concatenate((self.e_maps, e_map_data), axis=0)
+        if self.aug == "icarl" or self.aug == "e2e":
+            self.train_data = np.concatenate((self.train_data, images), axis=0)
+            self.train_labels = self.train_labels + labels
+            self.e_maps = np.concatenate((self.e_maps, e_map_data), axis=0)
+        elif self.aug == "e2e_full":
+            self.train_data[self.curr_orig_len:self.curr_orig_len+len(labels)] = images
+            self.train_labels = self.train_labels + labels
+            self.e_maps[self.curr_orig_len:self.curr_orig_len+len(labels)] = e_map_data
+            self.curr_orig_len += len(labels)
+            self.curr_len += len(labels)
+
+    def inflate_dataset(self):
+        if self.aug == "icarl" or self.aug == "e2e":
+            cnt = Counter(self.train_labels)
+            curr_data_labels = np.array(self.train_labels, dtype=np.int32)
+            curr_data = self.train_data
+            curr_data_e_maps = self.e_maps
+            most_common_class, most_common_images = cnt.most_common(1)[0]
+            for label, count in cnt.items():
+                if label != most_common_class:
+                    temp_train_data = curr_data[curr_data_labels == label]
+                    temp_train_label = curr_data_labels[curr_data_labels == label]
+                    temp_e_maps = curr_data_e_maps[curr_data_labels == label]
+                    indices_selected = np.random.choice(len(temp_train_data),len(curr_data[curr_data_labels == most_common_class])-len(temp_train_data),replace=True)
+                    train_data_selected = temp_train_data[indices_selected]
+                    train_labels_selected = temp_train_label[indices_selected]
+                    e_maps_selected = temp_e_maps[indices_selected]
+
+                    self.train_data = np.concatenate((self.train_data, train_data_selected), axis=0)
+                    self.train_labels = np.concatenate((np.array(self.train_labels),train_labels_selected), axis=0).tolist()
+                    self.e_maps = np.concatenate((self.e_maps, e_maps_selected), axis=0)
 
     def get_augmented_set(self):
         """
@@ -293,9 +331,8 @@ class iCIFAR10(CIFAR10):
         """
         train_data = []
         train_labels = []
-        self.curr_len = self.num_e_frames
 
-        for i in range(self.num_e_frames):
+        for i in range(self.curr_orig_len):
             start_len = self.curr_len
             curr_img = self.train_data[i]
             ################### data augmentation ################
@@ -334,6 +371,8 @@ class iCIFAR10(CIFAR10):
                 self.train_labels.append(self.train_labels[i])
             self.e_maps[start_len:self.curr_len,0] = np.array([self.e_maps[i,0]]*11)
             self.e_maps[start_len:self.curr_len,1] = np.array([self.e_maps[i,1]]*11)
+        print("ORIG LEN: ===>", self.curr_orig_len)
+        print("CURR LEN: ===>", self.curr_len)
 
 class iCIFAR100(iCIFAR10):
     base_folder = "cifar-100-python"

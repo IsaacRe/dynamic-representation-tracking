@@ -10,6 +10,7 @@ from utils.loader_utils import CustomRandomSampler
 from utils.loader_utils import CustomBatchSampler
 from utils.model_utils import kaiming_normal_init
 from utils.model_utils import MultiClassCrossEntropyLoss
+import os
 
 import pdb
 
@@ -38,18 +39,42 @@ class IncrNet(nn.Module):
         self.dist = args.dist
         self.algo = args.algo
         self.epsilon = 1e-16
+        self.ncm = args.ncm
+        self.network = args.network
+        self.aug = args.aug
 
+        # whether to load model from pretrained model
+        self.file_path = args.file_path
+        # Whether to use fixed (loaded from pretrained model) exemplar set
+        self.fixed_ex = args.fixed_ex
+        # Whether to use a pretrained model from the same task
+        self.ptr_model = args.ptr_model
         # Network architecture
         super(IncrNet, self).__init__()
-        self.model = models.resnet34(pretrained=self.pretrained)
+        if len(self.file_path) == 0:
+            self.model = models.resnet34(pretrained=self.pretrained)
+        else:
+            model_path = "%s-model.pth.tar" %os.path.splitext(self.file_path)[0]
+            classes_path = "%s-classes.npz" %os.path.splitext(self.file_path)[0]
+            print('Loading pretrained model from: ', self.file_path)
+            mdl = torch.load(model_path, map_location=lambda storage, loc: storage)
+            self.model = mdl.model
+            if self.fixed_ex:
+                self.exemplar_sets_full = mdl.exemplar_sets
+                self.exemplar_bbs_full = mdl.exemplar_bbs
+                self.eset_le_maps_full = mdl.eset_le_maps
+                self.ex_class_id_map = {cl: idx for (cl, idx) in zip(np.load(classes_path)['classes_seen'], np.load(classes_path)['model_classes_seen'])}
+                # Train a new model with random weights
+                if not self.ptr_model:
+                    self.model = models.resnet34(pretrained=self.pretrained)
+
         if not self.pretrained:
             self.model.apply(kaiming_normal_init)
         feat_size = self.model.fc.in_features
         self.model.fc = nn.Linear(feat_size, 1, bias=False)
         self.fc = self.model.fc
         self.feature_extractor = nn.Sequential(
-            *list(self.model.children())[:-1])
-        
+            *list(self.model.children())[:-1])       
         # GPU device for the model
         self.device = device
 
@@ -200,50 +225,64 @@ class IncrNet(nn.Module):
             preds: Tensor of size (x.shape[0],)
         '''
         batch_size = x.size(0)
-
-        if self.algo == 'icarl':
-            if self.compute_means:
-                self.compute_exemplar_means(mean_image, img_size)
-
-            # Expand means to compute distance to each mean 
-            # for each feature vector
-            exemplar_means = self.exemplar_means
-            means = torch.stack(exemplar_means).cuda(
-                device=self.device)  # (n_classes, feature_size)
-            # (batch_size, n_classes, feature_size)
-            means = torch.stack([means] * batch_size)
-            # (batch_size, feature_size, n_classes)
-            means = means.transpose(1, 2)
-
-            # Expand features to find distance from each mean
-            feature = self.feature_extractor(x)  # (batch_size, feature_size)
-            feature_norm = feature.data.norm(p=2, dim=1) + self.epsilon
-            feature_norm = feature_norm.unsqueeze(1)
-            feature.data = feature.data.div(feature_norm.expand_as(feature))
-            feature = feature.squeeze(3)  # (batch_size, feature_size, 1)
-            # (batch_size, feature_size, n_classes)
-            feature = feature.expand_as(means)
-
-            # (batch_size, n_classes)
-            dists = (feature - means).pow(2).sum(1).squeeze()
-
-            if len(dists.data.shape) == 1:  # Only one output node right now
-                preds = Variable(torch.LongTensor(
-                    np.zeros(dists.data.shape, 
-                             dtype=np.int64)).cuda(device=self.device))
-            else:
-                # predict class based on closest exemplar mean
-                _, preds = dists.min(1)
-
-        elif self.algo == 'lwf':
+        if self.algo == 'lwf':
             sigmoids = torch.sigmoid(self.forward(x))
             _, preds = sigmoids.max(dim=1)
-        
-        elif self.algo == 'e2e':
-            _, preds = torch.max(torch.softmax(self.forward(x), dim=1), 
-                                 dim=1, keepdim=False)
+            return preds
+
+        if self.algo == 'icarl' and not self.network:
+            return self.classify_ncm(x, mean_image, img_size)
+        if self.algo == 'e2e' and not self.ncm:
+            return self.classify_network(x)
+        if (self.algo == 'icarl' and self.network) \
+            or (self.algo == 'e2e' and self.ncm):
+            preds_ncm = self.classify_ncm(x, mean_image, img_size)
+            preds_network = self.classify_network(x)
+            return preds_ncm, preds_network
+
+    def classify_ncm(self, x, mean_image, img_size):
+        batch_size = x.size(0)
+
+        if self.compute_means:
+            self.compute_exemplar_means(mean_image, img_size)
+
+        # Expand means to compute distance to each mean 
+        # for each feature vector
+        exemplar_means = self.exemplar_means
+        means = torch.stack(exemplar_means).cuda(
+            device=self.device)  # (n_classes, feature_size)
+        # (batch_size, n_classes, feature_size)
+        means = torch.stack([means] * batch_size)
+        # (batch_size, feature_size, n_classes)
+        means = means.transpose(1, 2)
+
+        # Expand features to find distance from each mean
+        feature = self.feature_extractor(x)  # (batch_size, feature_size)
+        feature_norm = feature.data.norm(p=2, dim=1) + self.epsilon
+        feature_norm = feature_norm.unsqueeze(1)
+        feature.data = feature.data.div(feature_norm.expand_as(feature))
+        feature = feature.squeeze(3)  # (batch_size, feature_size, 1)
+        # (batch_size, feature_size, n_classes)
+        feature = feature.expand_as(means)
+
+        # (batch_size, n_classes)
+        dists = (feature - means).pow(2).sum(1).squeeze()
+
+        if len(dists.data.shape) == 1:  # Only one output node right now
+            preds = Variable(torch.LongTensor(
+                np.zeros(dists.data.shape, 
+                         dtype=np.int64)).cuda(device=self.device))
+        else:
+            # predict class based on closest exemplar mean
+            _, preds = dists.min(1)
 
         return preds
+
+    def classify_network(self, x):
+        _, preds = torch.max(torch.softmax(self.forward(x), dim=1), 
+                                 dim=1, keepdim=False)
+        return preds
+
 
     def construct_exemplar_set(self, images, image_means, le_maps, 
                                image_bbs, m, cl, curr_iter, overwrite=False):
@@ -332,7 +371,16 @@ class IncrNet(nn.Module):
                 indices_selected.append(indices_remaining[i])
                 indices_remaining = np.delete(indices_remaining, i, axis=0)
         elif self.random_exemplar:
-            indices_selected = np.random.choice(len(images),min(len(images),m),replace=False)
+            num_new_imgs = np.sum(le_maps[:, 0] == curr_iter)
+            num_old_imgs = len(images) - num_new_imgs
+            weights = np.zeros(len(images), dtype=np.float32)
+            weights[le_maps[:, 0] == curr_iter] = float(
+                num_old_imgs + 1)/(num_old_imgs + num_new_imgs + 1)
+            weights[le_maps[:, 0] != curr_iter] = float(
+                num_new_imgs + 1)/(num_old_imgs + num_new_imgs + 1)
+            # Make sure the weights sum to 1
+            weights /= np.sum(weights)
+            indices_selected = np.random.choice(len(images),min(len(images),m), p=weights, replace=False)
 
 
         if cl < self.n_known or overwrite:
@@ -405,6 +453,8 @@ class IncrNet(nn.Module):
         # Form combined training set
         if self.algo == 'icarl':
             self.combine_dataset_with_exemplars(dataset)
+        if self.aug == "e2e_full":
+            dataset.get_augmented_set()
 
         # if self.sample == 'minibatch_sampling':
         #     weights = dataset.get_class_weights()
@@ -446,33 +496,36 @@ class IncrNet(nn.Module):
 
                 optimizer.zero_grad()
                 g = self.forward(images)
-                g = torch.sigmoid(g)
-                q[:, :] = 0
+                if self.loss == 'BCE':
+                    g = torch.sigmoid(g)
+                    q[:, :] = 0
 
-                if self.dist:
-                    labels = labels.cuda(device=self.device)
-                    if self.n_known > 0:
-                        # Store network outputs with pre-update parameters
-                        # for distillation
-                        q_prev = torch.sigmoid(prev_model.forward(images))
-                        q.data[:len(labels), :self.n_known] = q_prev.data[:, :self.n_known]
+                    if self.dist:
+                        labels = labels.cuda(device=self.device)
+                        if self.n_known > 0:
+                            # Store network outputs with pre-update parameters
+                            # for distillation
+                            q_prev = torch.sigmoid(prev_model.forward(images))
+                            q.data[:len(labels), :self.n_known] = q_prev.data[:, :self.n_known]
 
-                    # For new classes use label 1
-                    for curr_class_idx in curr_class_idxs:
-                        q.data[:len(labels), curr_class_idx] = 0
-                        q.data[:len(labels), curr_class_idx].masked_fill_(
-                            labels == curr_class_idx, 1)
-                else:
-                    labels = labels.cuda(device=self.device)
-                    pos_labels = labels
-                    pos_indices = torch.arange(0, g.data.shape[0], 
-                        out=torch.LongTensor()).cuda(device=self.device)[pos_labels != -1]
-                    pos_labels = pos_labels[pos_labels != -1]
+                        # For new classes use label 1
+                        for curr_class_idx in curr_class_idxs:
+                            q.data[:len(labels), curr_class_idx] = 0
+                            q.data[:len(labels), curr_class_idx].masked_fill_(
+                                labels == curr_class_idx, 1)
+                    else:
+                        labels = labels.cuda(device=self.device)
+                        pos_labels = labels
+                        pos_indices = torch.arange(0, g.data.shape[0], 
+                            out=torch.LongTensor()).cuda(device=self.device)[pos_labels != -1]
+                        pos_labels = pos_labels[pos_labels != -1]
 
-                    if len(pos_indices) > 0:
-                        q[pos_indices, pos_labels] = 1
+                        if len(pos_indices) > 0:
+                            q[pos_indices, pos_labels] = 1
 
-                loss = self.bce_loss(g, q[:len(labels)])
+                    loss = self.bce_loss(g, q[:len(labels)])
+                elif self.loss == 'CE':
+                    loss = self.ce_loss(g, labels)
 
                 if self.sample == 'gradient_iid':
                     # loss has reduction='none'
@@ -538,6 +591,10 @@ class IncrNet(nn.Module):
         
         optimizer = optim.SGD(self.parameters(), lr=lr, momentum=self.momentum, 
                               weight_decay=self.weight_decay)
+        if self.loss == "BCE":
+            q = Variable(torch.zeros(\
+                self.batch_size, self.n_classes))\
+                .cuda(device=self.device)
         
         with tqdm(total=num_batches_per_epoch*num_epoch) as pbar:
             for i, (indices, images, labels) in enumerate(loader):
@@ -562,14 +619,28 @@ class IncrNet(nn.Module):
                 if self.n_classes == 1:
                     logits = torch.sigmoid(logits)
                     # q of shape (batch_size, 1) same as logits
-                    q = Variable(torch.zeros(len(images), 1)
+                    q_0 = Variable(torch.zeros(len(images), 1)
                                 ).cuda(device=self.device)
                     if torch.any(labels!=-1):
-                        q[labels != -1, 0] = 1
-                    cls_loss = self.bce_loss(logits, q) 
-                    del q
+                        q_0[labels != -1, 0] = 1
+                    cls_loss = self.bce_loss(logits, q_0) 
+                    del q_0
                 else:
-                    cls_loss = self.ce_loss(logits, labels)
+                    if self.loss == "BCE":
+                        g = torch.sigmoid(logits)
+                        q[:, :] = 0
+                        pos_labels = labels
+                        pos_indices = torch.arange(0, g.data.shape[0], 
+                            out=torch.LongTensor()).cuda(device=self.device)[pos_labels != -1]
+                        pos_labels = pos_labels[pos_labels != -1]
+
+                        if len(pos_indices) > 0:
+                            q[pos_indices, pos_labels] = 1
+
+                        cls_loss = self.bce_loss(g, q[:len(labels)])
+
+                    elif self.loss == "CE":
+                        cls_loss = self.ce_loss(logits, labels)
 
                 
                 # Get distillation loss
