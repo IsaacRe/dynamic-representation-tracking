@@ -71,6 +71,8 @@ parser.add_argument("--num_iters", default=1000, type=int,
                     help="Total number of learning exposures (currently"
                          " only integer multiples of args.total_classes"
                          " each class seen equal number of times)")
+parser.add_argument("--fix_explr", action='store_true',
+                    help="Fix the number of exemplars per class")
 
 # Model options
 parser.add_argument("--algo", default="icarl", type=str,
@@ -81,11 +83,15 @@ parser.add_argument("--pt", dest="pretrained", action="store_true",
                     help="Option to start from an ImageNet pretrained model")
 parser.add_argument("--ncm", dest="ncm", action="store_true",
                     help="Use nearest class mean classification (for E2E)")
-parser.add_argument('--ex_random', action='store_true',
+parser.add_argument('--random_explr', action='store_true',
                     help='Whether to randomly sample exemplars from training set each exposure')
-parser.add_argument('--fix_explr', action='store_true', help='Whether to fix the number of exemplars per class')
 parser.add_argument('--keep_explr', action='store_true',
                     help='Whether to use previously sampled exemplar set when constructing exemplars for seen classes')
+parser.add_argument('--sample', default='none', type=str,
+                    help='Sampling mechanism to be performed')
+parser.add_argument('--explr_neg_sig', dest='explr_neg_sig', action='store_true', help='Option to use exemplars as negative signals (for iCaRL)')
+parser.add_argument('--loss', default='BCE', type=str,
+                    help='Loss to be used in classification')
 
 # Training options
 parser.add_argument("--diff_order", dest="d_order", action="store_true",
@@ -98,6 +104,10 @@ parser.add_argument("--s_ch", default=0.05, type=float,
                     help="Color jittering : max saturation change")
 parser.add_argument("--l_ch", default=0.1, type=float,
                     help="Color jittering : max lightness change")
+parser.add_argument("--aug", default="icarl", type=str,
+                    help="Data augmentation to perform on train data")
+parser.add_argument("--s_wo_rep", dest="sample_w_replacement", action="store_false",
+                    help="Sampling train data with replacement")
 
 # System options
 parser.add_argument("--test_freq", default=1, type=int,
@@ -343,7 +353,7 @@ def train_run(device):
         model.construct_exemplar_set(images, \
                                      mean_images, \
                                      le_maps, None, m, \
-                                     model_curr_class_idx, s, random=args.ex_random)
+                                     model_curr_class_idx, s)
         model.n_known = model.n_classes
 
         n_known[s] = model.n_known
