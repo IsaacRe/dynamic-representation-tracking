@@ -32,6 +32,10 @@ parser.add_argument("--resume", dest="resume", action="store_true",
 parser.add_argument("--resume_outfile", default=None, type=str,
                     help="Output file name after resuming")
 
+# Arguments when resuming from exemplar-batch-trained model
+parser.add_argument("--batch_coverage", type=str, default=None,
+                    help="The coverage file containing class info for batch training (used when pretraining from batch)")
+
 # Hyperparameters
 parser.add_argument("--init_lr", default=0.002, type=float,
                     help="initial learning rate")
@@ -71,6 +75,8 @@ parser.add_argument("--num_iters", default=1000, type=int,
                     help="Total number of learning exposures (currently"
                          " only integer multiples of args.total_classes"
                          " each class seen equal number of times)")
+parser.add_argument("--fix_explr", action='store_true',
+                    help="Fix the number of exemplars per class")
 
 # Model options
 parser.add_argument("--algo", default="icarl", type=str,
@@ -161,6 +167,9 @@ if not os.path.exists(os.path.dirname(args.outfile)):
     if len(os.path.dirname(args.outfile)) != 0:
         os.makedirs(os.path.dirname(args.outfile))
 
+batch_pt = False
+if args.resume and 'batch' in os.path.splitext(args.outfile)[0]:
+    batch_pt = True
 
 num_classes = args.num_classes
 test_freq = 1
@@ -185,7 +194,9 @@ K = args.num_exemplars  # total number of exemplars
 model = IncrNet(args, device=train_device, cifar=True)
 
 # Randomly choose a subset of classes
-if args.subset and args.d_order:
+if batch_pt:
+    perm_id = np.array(list(set(np.load(args.batch_coverage)['classes_seen'])))
+elif args.subset and args.d_order:
     perm_id = np.random.choice(100, total_classes, replace=False)
     perm_id = np.random.permutation(perm_id)
 elif args.d_order:
@@ -251,54 +262,86 @@ data_mgr = mp.Manager()
 """
 expanded_classes = data_mgr.list([None for i in range(args.test_freq)])
 
-
 if args.resume:
-    print("resuming model from %s-model.pth.tar" %
-          os.path.splitext(args.outfile)[0])
+    if not batch_pt:
+        print("resuming model from %s-model.pth.tar" %
+              os.path.splitext(args.outfile)[0])
 
-    model = torch.load("%s-model.pth.tar" % os.path.splitext(args.outfile)[0], 
-                       map_location=lambda storage, loc: storage)
-    model.device = train_device
+        model = torch.load("%s-model.pth.tar" % os.path.splitext(args.outfile)[0],
+                           map_location=lambda storage, loc: storage)
+        model.device = train_device
 
-    model.exemplar_means = []
-    model.compute_means = True
+        model.exemplar_means = []
+        model.compute_means = True
 
-    info_coverage = np.load("%s-coverage.npz" \
-        % os.path.splitext(args.outfile)[0])
-    info_matr = np.load("%s-matr.npz" % os.path.splitext(args.outfile)[0])
-    if expt_githash != info_coverage["expt_githash"]:
-        print("Warning : Code was changed since the last time model was saved")
-        print("Last commit hash : ", info_coverage["expt_githash"])
-        print("Current commit hash : ", expt_githash)
+        info_coverage = np.load("%s-coverage.npz" \
+            % os.path.splitext(args.outfile)[0])
+        info_matr = np.load("%s-matr.npz" % os.path.splitext(args.outfile)[0])
+        if expt_githash != info_coverage["expt_githash"]:
+            print("Warning : Code was changed since the last time model was saved")
+            print("Last commit hash : ", info_coverage["expt_githash"])
+            print("Current commit hash : ", expt_githash)
 
-    args_resume_outfile = args.resume_outfile
-    perm_id = info_coverage["perm_id"]
-    num_iters_done = model.num_iters_done
-    acc_matr = info_matr["acc_matr"]
-    args = info_matr["args"].item()
+        args_resume_outfile = args.resume_outfile
+        perm_id = info_coverage["perm_id"]
+        num_iters_done = model.num_iters_done
+        acc_matr = info_matr["acc_matr"]
+        args = info_matr["args"].item()
 
-    if args_resume_outfile is not None:
-        args.outfile = args.resume_outfile = args_resume_outfile
+        if args_resume_outfile is not None:
+            args.outfile = args.resume_outfile = args_resume_outfile
+        else:
+            print("Overwriting old files")
+
+        model_classes_seen = list(
+            info_coverage["model_classes_seen"][:num_iters_done])
+        classes_seen = list(info_coverage["classes_seen"][:num_iters_done])
+        coverage = info_coverage["coverage"]
+        train_set.all_train_coverage = info_coverage["train_coverage"]
+
+        train_counter = mp.Value("i", num_iters_done)
+        test_counter = mp.Value("i", num_iters_done)
+
+        # expanding test set to everything seen earlier
+        for mdl_cl, gt_cl in zip(model_classes_seen, classes_seen):
+            print("Expanding class for resuming : %d, %d" %(mdl_cl, gt_cl))
+            test_set.expand([mdl_cl], [gt_cl])
+
+        # Ensuring requires_grad = True after model reload
+        for p in model.parameters():
+            p.requires_grad = True
     else:
-        print("Overwriting old files")
+        batch_pt = True
 
-    model_classes_seen = list(
-        info_coverage["model_classes_seen"][:num_iters_done])
-    classes_seen = list(info_coverage["classes_seen"][:num_iters_done])
-    coverage = info_coverage["coverage"]
-    train_set.all_train_coverage = info_coverage["train_coverage"]
+        print("resuming model from %s-model.pth.tar" %
+              os.path.splitext(args.outfile)[0])
 
-    train_counter = mp.Value("i", num_iters_done)
-    test_counter = mp.Value("i", num_iters_done)
+        model.from_resnet("%s-model.pth.tar" % os.path.splitext(args.outfile)[0])
 
-    # expanding test set to everything seen earlier
-    for mdl_cl, gt_cl in zip(model_classes_seen, classes_seen):
-        print("Expanding class for resuming : %d, %d" %(mdl_cl, gt_cl))
-        test_set.expand([mdl_cl], [gt_cl])
+        info_matr = np.load("%s-matr.npz" % os.path.splitext(args.outfile)[0])
+        args_resume_outfile = args.resume_outfile
+        model.num_iters_done = 0
+        num_iters_done = model.num_iters_done
+        new_args = info_matr["args"].item()
+        for k, v in new_args.__dict__.items():
+            args.__dict__[k] = v
 
-    # Ensuring requires_grad = True after model reload
-    for p in model.parameters():
-        p.requires_grad = True
+        if args_resume_outfile is not None:
+            args.outfile = args.resume_outfile = args_resume_outfile
+        else:
+            print("Overwriting old files")
+
+        train_counter = mp.Value("i", num_iters_done)
+        test_counter = mp.Value("i", num_iters_done)
+
+        # expanding test set to everything seen earlier
+        for mdl_cl, gt_cl in zip(model_classes_seen, classes_seen):
+            print("Expanding class for resuming : %d, %d" %(mdl_cl, gt_cl))
+            test_set.expand([mdl_cl], [gt_cl])
+
+        # Ensuring requires_grad = True after model reload
+        for p in model.parameters():
+            p.requires_grad = True
 
 
 def train_run(device):
@@ -357,9 +400,10 @@ def train_run(device):
                                           args.num_workers)
         model.eval()
         del prev_model
-        m = int(K / model.n_classes)
+        m = args.num_exemplars if args.fix_explr else int(K / model.n_classes)
 
-        model.reduce_exemplar_sets(m)
+        if not args.fix_explr:
+            model.reduce_exemplar_sets(m)
         # Construct exemplar sets for current class
         print("Constructing exemplar set for class index %d , %s ..." \
             %(model_curr_class_idx, curr_class), end="")

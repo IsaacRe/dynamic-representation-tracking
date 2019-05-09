@@ -108,8 +108,17 @@ class IncrNet(nn.Module):
 
         # random exemplar option
         self.random_exemplar = args.random_explr
+        self.batch_pt = False
 
-        
+    def from_resnet(self, model_file):
+        self.batch_pt = True
+        model = torch.load(model_file,
+                           map_location=lambda storage, loc: storage)
+        self.model = model
+        self.model.fc = self.fc
+        self.feature_extractor = nn.Sequential(
+            *list(self.model.children())[:-1])
+
     def forward(self, x):
         x = self.feature_extractor(x)
         x = x.view(x.size(0), -1)
@@ -336,7 +345,7 @@ class IncrNet(nn.Module):
             indices_selected = np.random.choice(len(images),min(len(images),m),replace=False)
 
 
-        if cl < self.n_known or overwrite:
+        if cl < len(self.exemplar_sets) or overwrite:
             # Repeated exposure, or balanced finetuning for E2EIL
             self.exemplar_sets[cl] = np.array(images[indices_selected])
             self.eset_le_maps[cl] = np.array(le_maps[indices_selected])
