@@ -34,6 +34,7 @@ class iDataset(torch.utils.data.Dataset):
         self.img_size = args.img_size
         self.aug = args.aug
         self.explr_neg_sig = args.explr_neg_sig
+        self.sample = args.sample
 
         self.datax = np.empty((max_data_size,3,
                                self.img_size,self.img_size),
@@ -140,8 +141,11 @@ class iDataset(torch.utils.data.Dataset):
             curr_img = torch.FloatTensor((curr_img - curr_mean)/255.)
 
         target = self.datay[index]
+        weight = self.weights[index]
 
-        return index, curr_img, target
+
+
+        return index, curr_img, target, weight
 
     def __len__(self):
         return self.curr_len
@@ -162,18 +166,31 @@ class iDataset(torch.utils.data.Dataset):
             bb = self.bb[indices][curr_data_y == label] 
             return datax, data_means, dataz, bb
 
-    def get_class_weights(self):
+    def update_class_weights_bce(self):
+        # This works for 1 class at a time
+        self.weights = np.ones(self.weights.shape, dtype=float)
         cnt = Counter(self.datay[:self.curr_len])
         curr_data_y = self.datay[:self.curr_len]
-        total = 0
-        for label, count in cnt.items():
-            self.weights[:self.curr_len][curr_data_y == label] = self.curr_len/count
-            total += self.curr_len / count
-        self.weights[:self.curr_len] /= total
-        print("Counter: ", cnt)
-        print("Curr datay: ", curr_data_y)
-        print("weights: ", self.weights[:self.curr_len])
-        return self.weights[:self.curr_len]
+        most_common_class, cnt_most_common = cnt.most_common(1)[0]
+        other_common_class, cnt_other_common = cnt.most_common(2)[1]
+
+        self.weights[:self.curr_len][curr_data_y != most_common_class] = float(cnt_most_common)/cnt_other_common
+        # print("Counter: ", cnt)
+        # print("Curr datay: ", curr_data_y)
+        # print("weights: ", self.weights[:self.curr_len])
+
+    def update_class_weights_ce(self):
+        # This works for 1 class at a time
+        self.weights = np.ones(self.weights.shape, dtype=float)
+        cnt = Counter(self.datay[:self.curr_len])
+        curr_data_y = self.datay[:self.curr_len]
+        most_common_class, cnt_most_common = cnt.most_common(1)[0]
+        other_common_class, cnt_other_common = cnt.most_common(2)[1]
+
+        self.weights[:self.curr_len][curr_data_y == most_common_class] = float(cnt_other_common)/cnt_most_common
+        # print("Counter: ", cnt)
+        # print("Curr datay: ", curr_data_y)
+        # print("weights: ", self.weights[:self.curr_len])
 
     def inflate_dataset(self):
     	cnt = Counter(self.datay[:self.curr_len])

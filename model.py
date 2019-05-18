@@ -116,7 +116,7 @@ class IncrNet(nn.Module):
 
         # Cross Entropy Loss functions
         self.loss = args.loss
-        if self.sample == 'gradient_iid':
+        if self.sample == 'wg':
             self.bce_loss = nn.BCELoss(reduction='none')
             self.ce_loss = nn.CrossEntropyLoss(reduction='none')
         else:
@@ -456,6 +456,7 @@ class IncrNet(nn.Module):
         if self.aug == "e2e_full":
             dataset.get_augmented_set()
 
+
         # if self.sample == 'minibatch_sampling':
         #     weights = dataset.get_class_weights()
         # else:
@@ -463,6 +464,14 @@ class IncrNet(nn.Module):
 
         if self.sample == 'minibatch_sampling_inflate':
         	dataset.inflate_dataset()
+
+        if self.sample == "wg":
+            if not (self.cifar and self.n_classes == 1):
+                print("UPDATING =>>>>")
+                if self.loss == "BCE":
+                    dataset.update_class_weights_bce()
+                elif self.loss == "CE":
+                    dataset.update_class_weights_ce()
 
         sampler = CustomRandomSampler(dataset, self.num_epoch, num_workers)
         batch_sampler = CustomBatchSampler(
@@ -483,7 +492,7 @@ class IncrNet(nn.Module):
         q = Variable(torch.zeros(self.batch_size, self.n_classes)
                      ).cuda(device=self.device)
         with tqdm(total=num_batches_per_epoch*self.num_epoch) as pbar:
-            for i, (indices, images, labels) in enumerate(loader):
+            for i, (indices, images, labels, weights) in enumerate(loader):
                 epoch = i//num_batches_per_epoch
 
                 if ((epoch+1) in self.lower_rate_epoch 
@@ -496,7 +505,7 @@ class IncrNet(nn.Module):
 
                 optimizer.zero_grad()
                 g = self.forward(images)
-                if self.loss == 'BCE':
+                if self.loss == 'BCE' or self.n_classes == 1:
                     g = torch.sigmoid(g)
                     q[:, :] = 0
 
@@ -525,23 +534,21 @@ class IncrNet(nn.Module):
 
                     loss = self.bce_loss(g, q[:len(labels)])
                 elif self.loss == 'CE':
+                    labels = labels.cuda(device=self.device)
                     loss = self.ce_loss(g, labels)
 
-                if self.sample == 'gradient_iid':
+                if self.sample == 'wg':
                     # loss has reduction='none'
                     if self.loss == 'BCE':
                         loss = torch.mean(loss, dim=1)
-                    if self.n_classes == 1 or not self.explr_neg_sig:
-                        freqs = torch.bincount(labels+1) #So -1 gets to 0
-                    else:
-                        freqs = torch.bincount(labels)
-                    # batch_size/weight instead of 1/weight so gradients don't 
-                    # get too small
-                    # print(freqs)
-                    weights = self.batch_size/(freqs[labels].float())
+                    weights = weights.float().cuda(device=self.device)
                     loss = torch.mean(loss * weights)
 
                 loss.backward()
+                # if self.n_classes > 1:
+                #     print('GRADS: ')
+                #     for i, p in enumerate(self.fc.parameters()):
+                #         print(p.grad.data)
                 optimizer.step()
 
                 tqdm.write('Epoch [%d/%d], Minibatch [%d/%d] Loss: %.4f' 

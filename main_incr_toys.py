@@ -548,7 +548,7 @@ def test_run(device):
                 all_preds_network = []
 
             with torch.no_grad():
-                for indices, images, labels in test_loader:
+                for indices, images, labels, _ in test_loader:
                     images = Variable(images).cuda(device=device)
                     if (args.algo == "icarl" and not args.network) \
                         or (args.algo == "e2e" and not args.ncm):

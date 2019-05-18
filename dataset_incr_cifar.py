@@ -39,6 +39,8 @@ class iCIFAR10(CIFAR10):
         # Whether to sample data with replacement
         self.s_w_replace = args.sample_w_replacement
         self.num_exemplars = args.num_exemplars
+        # weights for minibatch sampler
+        self.sample = args.sample
 
         # Select a subset of classes for incremental training and testing
         if self.train:
@@ -63,11 +65,15 @@ class iCIFAR10(CIFAR10):
                 self.train_data, self.train_labels = [], [] 
                 # e_maps keeps track of new images in the current learning exposure with regard to images from the exemplar set
                 self.e_maps = -np.ones((self.num_e_frames,2), dtype=np.int32)
+                self.weights = np.ones(self.num_e_frames, dtype=float)
+
             elif self.aug == "e2e_full":
                 self.train_data, self.train_labels = np.zeros((12*(self.num_e_frames+self.num_exemplars),3,self.img_size,self.img_size), dtype=np.uint8), []
                 self.curr_len = 0
                 self.curr_orig_len = 0
                 self.e_maps = -np.ones((12*(self.num_e_frames+self.num_exemplars),2), dtype=np.int32)
+                self.weights = np.ones(12*(self.num_e_frames+self.num_exemplars), dtype=float)
+
 
 
         else:
@@ -155,6 +161,9 @@ class iCIFAR10(CIFAR10):
                 img = self.train_data[index]
                 img = (img - self.mean_image)/255.
                 target = self.train_labels[index]
+            weight = self.weights[index]
+
+
 
 
         else:
@@ -165,6 +174,9 @@ class iCIFAR10(CIFAR10):
 
         img = torch.FloatTensor(img)
         target = np.array(target)
+
+        if self.train:
+            return index, curr_img, target, weight
         
         return index, img, target
 
@@ -212,7 +224,6 @@ class iCIFAR10(CIFAR10):
                 self.e_maps[:self.num_e_frames,0] = iteration
                 self.e_maps[:self.num_e_frames,1] = s_ind[rand]
 
-
             if self.aug == "icarl" or self.aug == "e2e":
                 self.train_data = np.concatenate(np.array(train_data, \
                     dtype=np.uint8),axis=0)
@@ -224,7 +235,7 @@ class iCIFAR10(CIFAR10):
                 self.train_labels = np.concatenate(np.array(train_labels, \
                     dtype=np.int32), axis=0).tolist()
                 self.curr_len = self.num_e_frames
-                self.curr_orig_len = self.num_e_frames
+                self.curr_orig_len = self.num_e_frames 
 
 
     def expand(self, model_new_classes, gt_new_classes):
@@ -297,12 +308,57 @@ class iCIFAR10(CIFAR10):
             self.train_data = np.concatenate((self.train_data, images), axis=0)
             self.train_labels = self.train_labels + labels
             self.e_maps = np.concatenate((self.e_maps, e_map_data), axis=0)
+            self.weights = np.concatenate((self.weights, np.ones(len(labels), dtype=float)))
         elif self.aug == "e2e_full":
             self.train_data[self.curr_orig_len:self.curr_orig_len+len(labels)] = images
             self.train_labels = self.train_labels + labels
             self.e_maps[self.curr_orig_len:self.curr_orig_len+len(labels)] = e_map_data
             self.curr_orig_len += len(labels)
             self.curr_len += len(labels)
+
+    def update_class_weights_bce(self):
+        if self.aug == "icarl" or self.aug == "e2e":
+            # This works for 1 class at a time
+            self.weights = np.ones(self.weights.shape, dtype=float)
+            cnt = Counter(self.train_labels)
+            curr_labels = self.train_labels
+            most_common_class, cnt_most_common = cnt.most_common(1)[0]
+            other_common_class, cnt_other_common = cnt.most_common(2)[1]
+
+            self.weights[curr_labels != most_common_class] = float(cnt_most_common)/cnt_other_common
+        elif self.aug == "e2e_full":
+            self.weights = np.ones(self.weights.shape, dtype=float)
+            cnt = Counter(self.train_labels[:self.curr_len])
+            curr_labels = self.train_labels[:self.curr_len]
+            most_common_class, cnt_most_common = cnt.most_common(1)[0]
+            other_common_class, cnt_other_common = cnt.most_common(2)[1]
+
+            self.weights[:self.curr_len][curr_labels != most_common_class] = float(cnt_most_common)/cnt_other_common
+        # print("Counter: ", cnt)
+        # print("Curr datay: ", curr_data_y)
+        # print("weights: ", self.weights[:self.curr_len])
+
+    def update_class_weights_ce(self):
+        if self.aug == "icarl" or self.aug == "e2e":
+            # This works for 1 class at a time
+            self.weights = np.ones(self.weights.shape, dtype=float)
+            cnt = Counter(self.train_labels)
+            curr_labels = self.train_labels
+            most_common_class, cnt_most_common = cnt.most_common(1)[0]
+            other_common_class, cnt_other_common = cnt.most_common(2)[1]
+
+            self.weights[curr_labels == most_common_class] = float(cnt_other_common)/cnt_most_common
+        elif self.aug == "e2e_full":
+            self.weights = np.ones(self.weights.shape, dtype=float)
+            cnt = Counter(self.train_labels[:self.curr_len])
+            curr_labels = self.train_labels[:self.curr_len]
+            most_common_class, cnt_most_common = cnt.most_common(1)[0]
+            other_common_class, cnt_other_common = cnt.most_common(2)[1]
+
+            self.weights[:self.curr_len][curr_labels == most_common_class] = float(cnt_other_common)/cnt_most_common
+        # print("Counter: ", cnt)
+        # print("Curr datay: ", curr_data_y)
+        # print("weights: ", self.weights[:self.curr_len])
 
     def inflate_dataset(self):
         if self.aug == "icarl" or self.aug == "e2e":
