@@ -31,10 +31,14 @@ parser.add_argument("--resume", dest="resume", action="store_true",
                     help="Resume training from checkpoint at outfile")
 parser.add_argument("--resume_outfile", default=None, type=str,
                     help="Output file name after resuming")
+parser.add_argument("--explr_start", action='store_true',
+                    help="Whether to start from a full exemplar set")
 
 # Arguments when resuming from exemplar-batch-trained model
 parser.add_argument("--batch_coverage", type=str, default=None,
                     help="The coverage file containing class info for batch training (used when pretraining from batch)")
+parser.add_argument("--explr_model", type=str, required=False,
+                    help="Model to load exemplars from")
 
 # Hyperparameters
 parser.add_argument("--init_lr", default=0.002, type=float,
@@ -96,6 +100,7 @@ parser.add_argument('--loss', default='BCE', type=str,
                     help='Loss to be used in classification')
 
 # Training options
+parser.add_argument("--fix_exposure", action='store_true', help="Fix order of class exposures")
 parser.add_argument("--diff_order", dest="d_order", action="store_true",
                     help="Use a random order of classes introduced")
 parser.add_argument("--subset", dest="subset", action="store_true",
@@ -214,15 +219,20 @@ if args.num_iters > args.total_classes:
     perm_file = "permutation_files/permutation_%d_%d.npy" \
                                     % (args.total_classes, num_repetitions)
 
-    if not os.path.exists(perm_file):
+    if not os.path.exists(perm_file) and not args.fix_exposure:
         os.makedirs("permutation_files", exist_ok=True)
         # Create random permutation file and save
         perm_arr = np.array(num_repetitions 
                             * list(np.arange(args.total_classes)))
         np.random.shuffle(perm_arr)
         np.save(perm_file, perm_arr)
+    else:
+        print("Loading permutation file: %s" % perm_file)
 
-    perm_id_all = np.load(perm_file) 
+    if not args.fix_exposure:
+        perm_id_all = np.load(perm_file)
+    else:
+        perm_id_all = np.array(num_repetitions * list(np.arange(args.total_classes)))
     print("PERM ID ALL: ===>", perm_id_all)
     for i in range(len(perm_id_all)):
         perm_id_all[i] = perm_id[perm_id_all[i]]
@@ -262,8 +272,8 @@ data_mgr = mp.Manager()
 """
 expanded_classes = data_mgr.list([None for i in range(args.test_freq)])
 
-if args.resume:
-    if not batch_pt:
+if args.resume or args.explr_start:
+    if not batch_pt and not args.explr_start:
         print("resuming model from %s-model.pth.tar" %
               os.path.splitext(args.outfile)[0])
 
@@ -311,31 +321,53 @@ if args.resume:
         for p in model.parameters():
             p.requires_grad = True
     else:
-        batch_pt = True
-
         print("resuming model from %s-model.pth.tar" %
               os.path.splitext(args.outfile)[0])
 
-        model.from_resnet("%s-model.pth.tar" % os.path.splitext(args.outfile)[0])
+        if args.resume:
+            model.from_resnet("%s-model.pth.tar" % os.path.splitext(args.outfile)[0])
 
-        info_matr = np.load("%s-matr.npz" % os.path.splitext(args.outfile)[0])
-        args_resume_outfile = args.resume_outfile
+        if args.explr_model is None:
+            coverage_model = '%s-model.pth.tar' % (args.batch_coverage.split('-coverage')[0])
+            assert os.path.exists(coverage_model), "Could not find model corresponding to specified coverage file"
+            args.explr_model = coverage_model
+        model_with_explrs = torch.load(args.explr_model, map_location=lambda storage, loc: storage)
+        # Transfer exemplars to the newly created model
+        model.exemplar_sets = model_with_explrs.exemplar_sets
+        num_explr = args.num_exemplars if not args.fix_explr else args.num_exemplars * total_classes
+        assert len(model.exemplar_sets) * model.exemplar_sets[0].shape[0] == args.num_exemplars, \
+            "Specified exemplar set does not match exemplar size provided"
+        model.eset_le_maps = model_with_explrs.eset_le_maps
+        model.compute_means = True
+        model.exemplar_means = model_with_explrs.exemplar_means
+        model.n_occurrences = [0] * total_classes
+
         model.num_iters_done = 0
-        num_iters_done = model.num_iters_done
-        new_args = info_matr["args"].item()
-        for k, v in new_args.__dict__.items():
-            args.__dict__[k] = v
+        if args.resume:
+            info_matr = np.load("%s-matr.npz" % os.path.splitext(args.outfile)[0])
+            args_resume_outfile = args.resume_outfile
+            model.num_iters_done = 0
+            num_iters_done = model.num_iters_done
+            new_args = info_matr["args"].item()
+            for k, v in new_args.__dict__.items():
+                args.__dict__[k] = v
 
-        if args_resume_outfile is not None:
-            args.outfile = args.resume_outfile = args_resume_outfile
-        else:
-            print("Overwriting old files")
+            if args_resume_outfile is not None:
+                args.outfile = args.resume_outfile = args_resume_outfile
+            else:
+                print("Overwriting old files")
+        num_iters_done = model.num_iters_done
 
         train_counter = mp.Value("i", num_iters_done)
         test_counter = mp.Value("i", num_iters_done)
 
-        # expanding test set to everything seen earlier
-        for mdl_cl, gt_cl in zip(model_classes_seen, classes_seen):
+        # initialize model with output channels for all classes
+        all_classes = list(set(perm_id))
+        model.increment_classes(all_classes)
+        all_model_classes = [model.classes_map[c] for c in all_classes]
+
+        # expanding test set to all classes
+        for mdl_cl, gt_cl in zip(all_model_classes, all_classes):
             print("Expanding class for resuming : %d, %d" %(mdl_cl, gt_cl))
             test_set.expand([mdl_cl], [gt_cl])
 

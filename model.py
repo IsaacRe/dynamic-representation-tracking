@@ -110,6 +110,9 @@ class IncrNet(nn.Module):
         self.random_exemplar = args.random_explr
         self.batch_pt = False
 
+        # for saving exposure learning stats
+        self.exposure_stats = []
+
     def from_resnet(self, model_file):
         self.batch_pt = True
         model = torch.load(model_file,

@@ -24,6 +24,8 @@ from dataset_incr_cifar import iCIFAR10, iCIFAR100
 
 parser = argparse.ArgumentParser(description="Incremental learning")
 
+# Test options
+parser.add_argument("--confusion_matrix", action='store_true', help="Compute confusion matrix for loaded model")
 
 # Saving options
 parser.add_argument("--outfile", default="results/temp.csv", type=str,
@@ -68,6 +70,8 @@ parser.add_argument("--total_classes", default=20, type=int,
                     help="Total number of classes")
 
 # Training Options
+parser.add_argument("--classes_from_coverage", action='store_true',
+                    help="Get cifar classes subset from 'classes_seen' in the provided coverage file")
 parser.add_argument("--batch_exemplar", action='store_true',
                     help="Train on a set of exemplars from a previous incremental training session")
 parser.add_argument("--coverage_file", type=str,
@@ -148,37 +152,52 @@ model = build_model()
 assert mean_image is not None
 transform_jitter = transforms.ColorJitter(hue=args.h_ch, saturation=args.s_ch, brightness=args.l_ch)
 transform_resize = transforms.Resize(args.img_size)
+# Use same settings as in icarl augmentation implemenation in iCifar10
+transform_crop = transforms.RandomCrop(args.img_size, padding=4)
 
-def resize_transpose_and_norm(train_data):
+
+def norm(img):
     # Resize and transpose to CxWxH all train images
-    resized_train_images = np.zeros((len(train_data),
-                                     args.img_size, args.img_size, 3), dtype=np.uint8)
-    for i, train_image in enumerate(train_data):
-        resized_train_images[i] = cv2.resize(train_image,
-                                             (args.img_size, args.img_size))
+    #resized_train_images = np.zeros((len(train_data),
+    #                                 args.img_size, args.img_size, 3), dtype=np.uint8)
     # normalize by mean
-    #resized_train_images = (resized_train_images - mean_image.transpose(2,1,0)) / 255.
-    return resized_train_images
+    return img - torch.Tensor(mean_image / 255.)
 
-classes = list(np.random.choice(100, total_classes, replace=False))
+
+train_transform = transforms.Compose([transform_jitter, transform_resize, transform_crop, transforms.ToTensor(), norm])
+test_transform = transforms.Compose([transform_resize, transforms.ToTensor(), norm])
+
+if args.classes_from_coverage:
+    classes = np.load(args.coverage_file)['classes_seen']
+    classes_ = []
+    for i in range(len(classes)):
+        if classes[i] not in classes_:
+            classes_ += [classes[i]]
+    classes = classes_
+else:
+    classes = list(np.random.choice(100, total_classes, replace=False))
 classes_map = {c: i for c, i in zip(classes, range(total_classes))}
 
 train_set = CIFAR100(root="./data",
                      train=True,
                      download=True,
-                     transform=transforms.Compose([transform_jitter, transform_resize, transforms.ToTensor()]))
+                     transform=train_transform)
 
 test_set = CIFAR100(root="./data",
                      train=False,
                      download=True,
-                     transform=transforms.Compose([transform_resize, transforms.ToTensor()]))
+                     transform=test_transform)
 
 num_epoch = args.num_epoch
 
 # Load exemplars to use as training data
 if args.batch_exemplar:
     classes_seen = np.load(args.coverage_file)['classes_seen']
-    classes = list(set(classes_seen))
+    classes = []
+    for c in classes_seen:
+        if c in classes:
+            continue
+        classes += [c]
     classes_map = {c: i for c, i in zip(classes, range(total_classes))}
     explr_data = np.load(args.coverage_file)['exemplar_data']
     final_explr = explr_data[-1]
@@ -200,7 +219,20 @@ if args.batch_exemplar:
             continue
         test_labels[i] = classes_map[test_labels[i]]
 else:
-    pass  # fix train set to total_classes
+    classes_map = {c: i for c, i in zip(classes, range(total_classes))}
+    train_set = Subset(train_set, np.where(np.isin(train_set.train_labels, classes))[0])
+    train_labels = train_set.dataset.train_labels
+    # iterate through each sample across exemplar sets
+    for i in range(len(train_labels)):
+        if train_labels[i] not in classes_map:
+            continue
+        train_labels[i] = classes_map[train_labels[i]]
+    test_set = Subset(test_set, np.where(np.isin(test_set.test_labels, classes))[0])
+    test_labels = test_set.dataset.test_labels
+    for i in range(len(test_labels)):
+        if test_labels[i] not in classes_map:
+            continue
+        test_labels[i] = classes_map[test_labels[i]]
 
 train_dl = torch.utils.data.DataLoader(train_set,
                                        num_workers=0 if args.debug else args.num_workers,
@@ -223,6 +255,7 @@ expanded_classes = data_mgr.list([None for i in range(args.test_freq)])
 
 start_epoch = 0
 num_epoch = args.num_epoch
+old_outfile = args.outfile
 
 if args.resume:
     print("resuming model from %s-model.pth.tar" %
@@ -232,10 +265,11 @@ if args.resume:
                        map_location=lambda storage, loc: storage)
     model.device = train_device
 
-    info_coverage = np.load("%s-coverage.npz" \
-                            % os.path.splitext(args.outfile)[0])
+    if not args.confusion_matrix:
+        info_coverage = np.load("%s-coverage.npz" \
+                                % os.path.splitext(args.outfile)[0])
     info_matr = np.load("%s-matr.npz" % os.path.splitext(args.outfile)[0])
-    if expt_githash != info_coverage["expt_githash"]:
+    if not args.confusion_matrix and "expt_githash" in info_coverage.files and expt_githash != info_coverage["expt_githash"]:
         print("Warning : Code was changed since the last time model was saved")
         print("Last commit hash : ", info_coverage["expt_githash"])
         print("Current commit hash : ", expt_githash)
@@ -243,7 +277,8 @@ if args.resume:
     args_resume_outfile = args.resume_outfile
     num_iters_done = acc_matr.shape[1]
     acc_matr = info_matr["acc_matr"]
-    args = info_matr["args"].item()
+    for k, v in info_matr['args'].item().__dict__.items():
+        args.__dict__[k] = v
     args.num_epoch = num_epoch
     start_epoch = num_iters_done
 
@@ -252,8 +287,9 @@ if args.resume:
     else:
         print("Overwriting old files")
 
-    coverage = info_coverage["coverage"]
-    train_set.all_train_coverage = info_coverage["train_coverage"]
+    if not args.confusion_matrix:
+        coverage = info_coverage["coverage"]
+        train_set.all_train_coverage = info_coverage["train_coverage"]
 
     # Ensuring requires_grad = True after model reload
     for p in model.parameters():
@@ -404,12 +440,64 @@ def test_run(device):
               test_wait_time)
         all_done.set()
 
+
+def confusion_matrix(device):
+    # Wait till training is done
+    """
+    time_ptr = time.time()
+    test_wait_time = 0
+    cond_var.acquire()
+    while train_counter.value < test_counter.value + args.test_freq:
+        print("[Test Process] Waiting on train process")
+        print("[Test Process] train_counter : ", train_counter.value)
+        print("[Test Process] test_counter : ", test_counter.value)
+        cond_var.wait()
+    cond_var.release()
+    test_wait_time += time.time() - time_ptr
+
+    cond_var.acquire()
+    test_model = dataQueue.get()
+    test_counter.value += args.test_freq
+    cond_var.notify_all()
+    cond_var.release()
+    """
+    test_model = model
+
+    print("[Test Process] Test Set Length:", len(test_dl.dataset.indices))
+
+    test_model.cuda(device=device)
+    test_model.eval()
+
+    print("[Test Process] Computing Accuracy matrix...")
+    all_labels = []
+    all_preds = []
+    with torch.no_grad():
+        for images, labels in test_dl:
+            images = Variable(images).cuda(device=device)
+            logits = test_model.forward(images)
+            _, preds = logits.max(dim=1)
+            all_preds.append(preds.data.cpu().numpy())
+            all_labels.append(labels.numpy())
+    all_preds = np.concatenate(all_preds, axis=0)
+    all_labels = np.concatenate(all_labels, axis=0)
+
+    confusion_matrix = np.ndarray((len(classes), len(classes)))
+    for c0 in classes:
+        for c1 in classes:
+            curr_indices = np.where(all_labels == c0)
+            confusion_matrix[c0, c1] = np.where(all_preds[curr_indices] == c1)[0].shape[0] / curr_indices[0].shape[0]
+    np.save(os.path.splitext(old_outfile)[0] + '-conf_matr.npy', confusion_matrix)
+
+
 def cleanup(train_process, test_process):
     train_process.terminate()
     test_process.terminate()
 
 
 def main():
+    if args.confusion_matrix:
+        confusion_matrix(train_device)
+        return
     train_process = mp.Process(target=train_run, args=(train_device,))
     test_process = mp.Process(target=test_run, args=(test_device,))
     atexit.register(cleanup, train_process, test_process)
