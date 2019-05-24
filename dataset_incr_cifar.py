@@ -323,17 +323,23 @@ class iCIFAR10(CIFAR10):
             cnt = Counter(self.train_labels)
             curr_labels = self.train_labels
             most_common_class, cnt_most_common = cnt.most_common(1)[0]
-            other_common_class, cnt_other_common = cnt.most_common(2)[1]
+            for i, label in enumerate(curr_labels):
+                cnt_lbl = cnt[label]
+                self.weights[i] = float(cnt_most_common)/cnt_lbl
+            # other_common_class, cnt_other_common = cnt.most_common(2)[1]
 
-            self.weights[curr_labels != most_common_class] = float(cnt_most_common)/cnt_other_common
+            # self.weights[curr_labels != most_common_class] = float(cnt_most_common)/cnt_other_common
         elif self.aug == "e2e_full":
             self.weights = np.ones(self.weights.shape, dtype=float)
             cnt = Counter(self.train_labels[:self.curr_len])
             curr_labels = self.train_labels[:self.curr_len]
             most_common_class, cnt_most_common = cnt.most_common(1)[0]
-            other_common_class, cnt_other_common = cnt.most_common(2)[1]
+            for i, label in enumerate(curr_labels):
+                cnt_lbl = cnt[label]
+                self.weights[:self.curr_len][i] = float(cnt_most_common)/cnt_lbl
+            # other_common_class, cnt_other_common = cnt.most_common(2)[1]
 
-            self.weights[:self.curr_len][curr_labels != most_common_class] = float(cnt_most_common)/cnt_other_common
+            # self.weights[:self.curr_len][curr_labels != most_common_class] = float(cnt_most_common)/cnt_other_common
         # print("Counter: ", cnt)
         # print("Curr datay: ", curr_data_y)
         # print("weights: ", self.weights[:self.curr_len])
@@ -344,18 +350,28 @@ class iCIFAR10(CIFAR10):
             self.weights = np.ones(self.weights.shape, dtype=float)
             cnt = Counter(self.train_labels)
             curr_labels = self.train_labels
-            most_common_class, cnt_most_common = cnt.most_common(1)[0]
-            other_common_class, cnt_other_common = cnt.most_common(2)[1]
+            least_common_class, cnt_least_common = cnt.most_common(len(cnt))[-1]
 
-            self.weights[curr_labels == most_common_class] = float(cnt_other_common)/cnt_most_common
+            for i, label in enumerate(curr_labels):
+                cnt_lbl = cnt[label]
+                self.weights[i] = float(cnt_least_common)/cnt_lbl
+
+            # most_common_class, cnt_most_common = cnt.most_common(1)[0]
+            # other_common_class, cnt_other_common = cnt.most_common(2)[1]
+
+            # self.weights[curr_labels == most_common_class] = float(cnt_other_common)/cnt_most_common
         elif self.aug == "e2e_full":
             self.weights = np.ones(self.weights.shape, dtype=float)
             cnt = Counter(self.train_labels[:self.curr_len])
             curr_labels = self.train_labels[:self.curr_len]
-            most_common_class, cnt_most_common = cnt.most_common(1)[0]
-            other_common_class, cnt_other_common = cnt.most_common(2)[1]
+            least_common_class, cnt_least_common = cnt.most_common(len(cnt))[-1]
+            for i, label in enumerate(curr_labels):
+                cnt_lbl = cnt[label]
+                self.weights[:self.curr_len][i] = float(cnt_least_common)/cnt_lbl
+            # most_common_class, cnt_most_common = cnt.most_common(1)[0]
+            # other_common_class, cnt_other_common = cnt.most_common(2)[1]
 
-            self.weights[:self.curr_len][curr_labels == most_common_class] = float(cnt_other_common)/cnt_most_common
+            # self.weights[:self.curr_len][curr_labels == most_common_class] = float(cnt_other_common)/cnt_most_common
         # print("Counter: ", cnt)
         # print("Curr datay: ", curr_data_y)
         # print("weights: ", self.weights[:self.curr_len])

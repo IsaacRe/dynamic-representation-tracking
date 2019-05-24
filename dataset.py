@@ -172,9 +172,12 @@ class iDataset(torch.utils.data.Dataset):
         cnt = Counter(self.datay[:self.curr_len])
         curr_data_y = self.datay[:self.curr_len]
         most_common_class, cnt_most_common = cnt.most_common(1)[0]
-        other_common_class, cnt_other_common = cnt.most_common(2)[1]
+        for i, data_y in enumerate(curr_data_y):
+            cnt_data_y = cnt[data_y]
+            self.weights[:self.curr_len][i] = float(cnt_most_common)/cnt_data_y
+        # other_common_class, cnt_other_common = cnt.most_common(2)[1]
 
-        self.weights[:self.curr_len][curr_data_y != most_common_class] = float(cnt_most_common)/cnt_other_common
+        # self.weights[:self.curr_len][curr_data_y != most_common_class] = float(cnt_most_common)/cnt_other_common
         # print("Counter: ", cnt)
         # print("Curr datay: ", curr_data_y)
         # print("weights: ", self.weights[:self.curr_len])
@@ -184,10 +187,15 @@ class iDataset(torch.utils.data.Dataset):
         self.weights = np.ones(self.weights.shape, dtype=float)
         cnt = Counter(self.datay[:self.curr_len])
         curr_data_y = self.datay[:self.curr_len]
-        most_common_class, cnt_most_common = cnt.most_common(1)[0]
-        other_common_class, cnt_other_common = cnt.most_common(2)[1]
+        least_common_class, cnt_least_common = cnt.most_common(len(cnt))[-1]
+        for i, data_y in enumerate(curr_data_y):
+            cnt_data_y = cnt[data_y]
+            self.weights[:self.curr_len][i] = float(cnt_least_common)/cnt_data_y
+        
+        # most_common_class, cnt_most_common = cnt.most_common(1)[0]
+        # other_common_class, cnt_other_common = cnt.most_common(2)[1]
 
-        self.weights[:self.curr_len][curr_data_y == most_common_class] = float(cnt_other_common)/cnt_most_common
+        # self.weights[:self.curr_len][curr_data_y == most_common_class] = float(cnt_other_common)/cnt_most_common
         # print("Counter: ", cnt)
         # print("Curr datay: ", curr_data_y)
         # print("weights: ", self.weights[:self.curr_len])
