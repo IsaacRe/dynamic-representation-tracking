@@ -111,6 +111,7 @@ class IncrNet(nn.Module):
         self.batch_pt = False
 
         # for saving exposure learning stats
+        self.record_iters = args.record_iters
         self.exposure_stats = []
 
     def from_resnet(self, model_file):

@@ -98,6 +98,8 @@ parser.add_argument('--random_explr', dest='random_explr', action='store_true',
                     help='Option for random exemplar set')
 parser.add_argument('--loss', default='BCE', type=str,
                     help='Loss to be used in classification')
+parser.add_argument('--record_iters', type=int, default=20,
+                    help='Number of iterations per epoch to record update statistics')
 
 # Training options
 parser.add_argument("--fix_exposure", action='store_true', help="Fix order of class exposures")
