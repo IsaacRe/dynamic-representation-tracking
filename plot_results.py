@@ -323,7 +323,7 @@ def plot_class_acc(args, file_mod=''):
     ax1.grid()
 
     acc_matr = info_matr['acc_matr'][:, args.range[0]:args.range[1]]
-    if not args.batch:
+    if not args.batch and 'start-explr' not in datafile:
         counter = []
         cnt = 0
         for i in range(len(classes_og)):
@@ -553,7 +553,7 @@ def plot_acc(args):
     ax1.set_yticks(np.arange(0, 101, 10))
     ax1.grid()
 
-    if classes is not None:
+    if classes is not None and 'start-explr' not in datafile:
         counter = []
         cnt = 0
         for i in range(len(classes)):
@@ -584,7 +584,7 @@ def plot_acc(args):
     plt.gcf().set_size_inches(16, 8)
     for f_type in args.filetype:
         plt.savefig('%s.%s' % (filename, f_type), dpi=300, bbox_inches='tight',
-                    pad_inches=0.01 ,transparent=True)
+                    pad_inches=0.01, transparent=True)
 
 
 def plot_class_forget(args):
