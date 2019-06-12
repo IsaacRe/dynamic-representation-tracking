@@ -176,7 +176,7 @@ class iCIFAR10(CIFAR10):
         target = np.array(target)
 
         if self.train:
-            return index, curr_img, target, weight
+            return index, img, target, weight
         
         return index, img, target
 
