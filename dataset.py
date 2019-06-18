@@ -34,6 +34,7 @@ class iDataset(torch.utils.data.Dataset):
         self.img_size = args.img_size
         self.aug = args.aug
         self.explr_neg_sig = args.explr_neg_sig
+        self.sample = args.sample
 
         self.datax = np.empty((max_data_size,3,
                                self.img_size,self.img_size),
@@ -75,7 +76,10 @@ class iDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         curr_img = np.float32(self.datax[index])
-        curr_mean = np.float32(self.data_means[index])
+        if self.aug == "icarl" or self.aug == "e2e":
+            curr_mean = np.float32(self.data_means[index])
+        elif self.aug == "e2e_full":
+            curr_mean = np.float32(self.data_means[index//12])
         bb = self.bb[index]
 
         if self.job == 'train' or self.job == 'batch_train':
@@ -137,31 +141,64 @@ class iDataset(torch.utils.data.Dataset):
             curr_img = torch.FloatTensor((curr_img - curr_mean)/255.)
 
         target = self.datay[index]
+        weight = self.weights[index]
 
-        return index, curr_img, target
+
+
+        return index, curr_img, target, weight
 
     def __len__(self):
         return self.curr_len
 
     def get_image_class(self, label):
-        curr_data_y = self.datay[:self.curr_len]
-        return (self.datax[:self.curr_len][curr_data_y == label],
-                self.data_means[:self.curr_len][curr_data_y == label], 
-                self.dataz[:self.curr_len][curr_data_y ==label], 
-                self.bb[:self.curr_len][curr_data_y == label])
+        if self.aug == "icarl" or self.aug == "e2e":
+            curr_data_y = self.datay[:self.curr_len]
+            return (self.datax[:self.curr_len][curr_data_y == label],
+                    self.data_means[:self.curr_len][curr_data_y == label], 
+                    self.dataz[:self.curr_len][curr_data_y ==label], 
+                    self.bb[:self.curr_len][curr_data_y == label])
+        elif self.aug == "e2e_full":
+            indices = np.arange(0,self.curr_len,12)
+            curr_data_y = self.datay[indices]
+            datax = self.datax[indices][curr_data_y == label]
+            data_means = self.data_means[:len(indices)][curr_data_y == label]
+            dataz = self.dataz[indices][curr_data_y == label]
+            bb = self.bb[indices][curr_data_y == label] 
+            return datax, data_means, dataz, bb
 
-    def get_class_weights(self):
+    def update_class_weights_bce(self):
+        # This works for 1 class at a time
+        self.weights = np.ones(self.weights.shape, dtype=float)
         cnt = Counter(self.datay[:self.curr_len])
         curr_data_y = self.datay[:self.curr_len]
-        total = 0
-        for label, count in cnt.items():
-            self.weights[:self.curr_len][curr_data_y == label] = self.curr_len/count
-            total += self.curr_len / count
-        self.weights[:self.curr_len] /= total
-        print("Counter: ", cnt)
-        print("Curr datay: ", curr_data_y)
-        print("weights: ", self.weights[:self.curr_len])
-        return self.weights[:self.curr_len]
+        most_common_class, cnt_most_common = cnt.most_common(1)[0]
+        for i, data_y in enumerate(curr_data_y):
+            cnt_data_y = cnt[data_y]
+            self.weights[:self.curr_len][i] = float(cnt_most_common)/cnt_data_y
+        # other_common_class, cnt_other_common = cnt.most_common(2)[1]
+
+        # self.weights[:self.curr_len][curr_data_y != most_common_class] = float(cnt_most_common)/cnt_other_common
+        # print("Counter: ", cnt)
+        # print("Curr datay: ", curr_data_y)
+        # print("weights: ", self.weights[:self.curr_len])
+
+    def update_class_weights_ce(self):
+        # This works for 1 class at a time
+        self.weights = np.ones(self.weights.shape, dtype=float)
+        cnt = Counter(self.datay[:self.curr_len])
+        curr_data_y = self.datay[:self.curr_len]
+        least_common_class, cnt_least_common = cnt.most_common(len(cnt))[-1]
+        for i, data_y in enumerate(curr_data_y):
+            cnt_data_y = cnt[data_y]
+            self.weights[:self.curr_len][i] = float(cnt_least_common)/cnt_data_y
+        
+        # most_common_class, cnt_most_common = cnt.most_common(1)[0]
+        # other_common_class, cnt_other_common = cnt.most_common(2)[1]
+
+        # self.weights[:self.curr_len][curr_data_y == most_common_class] = float(cnt_other_common)/cnt_most_common
+        # print("Counter: ", cnt)
+        # print("Curr datay: ", curr_data_y)
+        # print("weights: ", self.weights[:self.curr_len])
 
     def inflate_dataset(self):
     	cnt = Counter(self.datay[:self.curr_len])
@@ -269,3 +306,61 @@ class iDataset(torch.utils.data.Dataset):
                     self.dataz[self.curr_len:self.curr_len +
                                len(datax), 1] = np.arange(len(datax))
                 self.curr_len += len(datax)
+
+    def get_augmented_set(self):
+        """
+        Get augmented training set, each image has 12 copies, 11 modified and itself
+        """
+        if self.aug == "e2e_full":
+            # Copying data to the end, so datax can be filled with augmented images from the start
+            print('Before:', self.datay[:self.curr_len])
+            self.datax[-self.curr_len:] = self.datax[:self.curr_len]
+            self.datay[-self.curr_len:] = self.datay[:self.curr_len] 
+            self.bb[-self.curr_len:] = self.bb[:self.curr_len] 
+            self.dataz[-self.curr_len:] = self.dataz[:self.curr_len] 
+            
+            # Reads images from self.datax[-self.curr_len:] and fills up self.datax with augmented images
+            for i in range(self.curr_len):
+                curr_img_ctr = 0
+                curr_img = self.datax[-self.curr_len+i]
+                curr_label = self.datay[-self.curr_len+i]
+                curr_bb = self.bb[-self.curr_len+i]
+                curr_z = self.dataz[-self.curr_len+i]
+                curr_mean = self.data_means[i]
+                self.datax[i*12 + curr_img_ctr] = curr_img
+                curr_img_ctr += 1
+
+                ################### data augmentation ################
+                # brightness
+                brightness = np.random.randint(-63, 64)
+                b_curr_img = np.clip(np.int32(curr_img) + brightness, 0, 255)
+                self.datax[i*12 + curr_img_ctr] = np.uint8(b_curr_img) 
+                curr_img_ctr += 1
+
+                # contrast
+                contrast = np.random.random() * (1.6+1e-16) + 0.2  # random from 0.2 to 1.8 inclusive
+                c_curr_img = np.clip((np.float32(curr_img) - curr_mean) * contrast + curr_mean, 0, 255)
+                self.datax[i*12 + curr_img_ctr] = np.uint8(c_curr_img) 
+                curr_img_ctr += 1
+
+                # cropping
+                temp_len = curr_img_ctr
+                crops = np.random.random_integers(0,high=8,size=(3,2))
+                for r, cr_curr_img in enumerate(self.datax[i*12:i*12+temp_len]):
+                    padded = np.pad(cr_curr_img,((0,0),(4,4),(4,4)),mode='constant')
+                    self.datax[i*12 + curr_img_ctr] = padded[:,crops[r,0]:(crops[r,0]+self.img_size),crops[r,1]:(crops[r,1]+self.img_size)]  
+                    curr_img_ctr += 1
+
+                # mirror
+                temp_len = curr_img_ctr
+                for m_curr_img in self.datax[i*12:i*12+temp_len]:
+                    self.datax[i*12 + curr_img_ctr] = m_curr_img[:, :, ::-1]
+                    curr_img_ctr += 1
+                
+                for j in range(curr_img_ctr):
+                    self.datay[i*12 + j] = curr_label
+                    self.bb[i*12 + j] = curr_bb
+                    self.dataz[i*12 + j] = curr_z
+                ######################################################
+            self.curr_len *= 12
+            print("After: ", self.datay[:100])

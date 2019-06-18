@@ -91,6 +91,12 @@ parser.add_argument('--random_explr', dest='random_explr', action='store_true',
                     help='Option for random exemplar set')
 parser.add_argument('--loss', default='BCE', type=str,
 					help='Loss to be used in classification')
+parser.add_argument('--file_path', default='', type=str,
+                    help='Path to csv file of pretrained model')
+parser.add_argument('--fixed_ex', dest='fixed_ex', action='store_true',
+                    help='Option to use a fixed set of exemplars')
+parser.add_argument('--ptr_model', dest='ptr_model', action='store_true',
+                    help='Option to use a pretrained a model')
 
 # Training options
 parser.add_argument('--diff_order', dest='d_order', action='store_true',
@@ -124,6 +130,9 @@ parser.set_defaults(jitter=True)
 parser.set_defaults(save_all=False)
 parser.set_defaults(resume=False)
 parser.set_defaults(one_gpu=False)
+parser.set_defaults(fixed_ex=False)
+parser.set_defaults(ptr_model=False)
+
 
 
 # Print help if no arguments passed
@@ -200,6 +209,8 @@ if args.sample != 'minibatch_sampling_inflate':
 	max_train_data_size = 2 * args.lexp_len + args.num_exemplars
 else:
 	max_train_data_size = 2 * args.lexp_len * args.total_classes
+if args.aug == "e2e_full":
+    max_train_data_size *= 12
 max_test_data_size = args.total_classes * args.size_test
 
 # Initialize CNN
@@ -214,7 +225,15 @@ model_classes_seen = []  # Class index numbers stored by model
 exemplar_data = []  # Exemplar set information stored by the model
 # acc_matr row index represents class number and column index represents
 # learning exposure.
-acc_matr = np.zeros((args.total_classes, args.num_iters))
+if (args.algo == "icarl" and not args.network) \
+                        or (args.algo == "e2e" and not args.ncm):
+    acc_matr = np.zeros((args.total_classes, args.num_iters))
+elif (args.algo == "icarl" and args.network) \
+                        or (args.algo == "e2e" and args.ncm):
+    acc_matr_ncm = np.zeros((args.total_classes, args.num_iters))
+    acc_matr_network = np.zeros((args.total_classes, args.num_iters))
+
+
 
 # All object data generators
 data_generators = [DataGenerator(model_name=classes[i], 
@@ -238,6 +257,7 @@ all_done = mp.Event()
 data_mgr = mp.Manager()
 expanded_classes = data_mgr.list([None for i in range(args.test_freq)])
 
+
 if args.resume:
     print('resuming model from %s-model.pth.tar' %
           os.path.splitext(args.outfile)[0])
@@ -259,7 +279,15 @@ if args.resume:
     args_resume_outfile = args.resume_outfile
     perm_id = info_classes['perm_id']
     num_iters_done = info_matr['num_iters_done']
-    acc_matr = info_matr['acc_matr']
+    if (args.algo == "icarl" and not args.network) \
+                        or (args.algo == "e2e" and not args.ncm):
+        acc_matr = info_matr['acc_matr']
+    elif (args.algo == "icarl" and args.network) \
+                        or (args.algo == "e2e" and args.ncm):
+        acc_matr_ncm = info_matr['acc_matr_ncm']
+        acc_matr_network = info_matr['acc_matr_network']
+
+
     args = info_matr['args'].item()
 
     if args.resume_outfile is not None:
@@ -370,16 +398,24 @@ def train_run(device):
 
         if args.algo == 'icarl' or args.algo == 'e2e':
             # Reduce exemplar sets for known classes
-            model.reduce_exemplar_sets(m)
+            if not args.fixed_ex:
+                model.reduce_exemplar_sets(m)
 
             # Construct exemplar sets for current class
             print('Constructing exemplar set for class index %d , %s ...' %
                   (model_curr_class_idx, curr_class), end="")
 
-            images, image_means, le_maps, image_bbs = train_set.get_image_class(
-                model_curr_class_idx)
-            model.construct_exemplar_set(images, image_means, le_maps, 
+            if not args.fixed_ex:
+
+                images, image_means, le_maps, image_bbs = train_set.get_image_class(
+                    model_curr_class_idx)
+                model.construct_exemplar_set(images, image_means, le_maps, 
                                          image_bbs, m, model_curr_class_idx, s)
+            else:
+                if model_curr_class_idx >= model.n_known:
+                    model.exemplar_sets.append(model.exemplar_sets_full[model.ex_class_id_map[curr_class]])
+                    model.exemplar_bbs.append(model.exemplar_bbs_full[model.ex_class_id_map[curr_class]])
+                    model.eset_le_maps.append(model.eset_le_maps_full[model.ex_class_id_map[curr_class]])
         
 
         model.n_known = model.n_classes
@@ -454,7 +490,13 @@ def test_run(device):
 
     test_wait_time = 0
     with open(args.outfile, 'w') as file:
-        print("Model classes, Test Accuracy", file=file)
+        if (args.algo == "icarl" and not args.network) \
+                        or (args.algo == "e2e" and not args.ncm):
+            print("Model classes, Test Accuracy", file=file)
+        elif (args.algo == "icarl" and args.network) \
+                        or (args.algo == "e2e" and args.ncm):
+            print("Model classes, Test Accuracy NCM, Test Accuracy Network", file=file)
+
         while s < args.num_iters:
 
             # Wait till training is done
@@ -500,29 +542,95 @@ def test_run(device):
             print("[Test Process] Computing Accuracy matrix...")
 
             all_labels = []
-            all_preds = []
+
+            if (args.algo == "icarl" and not args.network) \
+                        or (args.algo == "e2e" and not args.ncm):
+                
+                all_preds = []
+            elif (args.algo == "icarl" and args.network) \
+                        or (args.algo == "e2e" and args.ncm):
+                all_preds_ncm = []
+                all_preds_network = []
+
             with torch.no_grad():
-                for indices, images, labels in test_loader:
+                for indices, images, labels, _ in test_loader:
                     images = Variable(images).cuda(device=device)
-                    preds = test_model.classify(images, 
+                    if (args.algo == "icarl" and not args.network) \
+                        or (args.algo == "e2e" and not args.ncm):
+                        preds = test_model.classify(images, 
+                                                    mean_image, 
+                                                    args.img_size)
+                        all_preds.append(preds.data.cpu().numpy())
+                    elif (args.algo == "icarl" and args.network) \
+                        or (args.algo == "e2e" and args.ncm):
+                        preds_ncm, preds_network = \
+                                test_model.classify(images, 
                                                 mean_image, 
                                                 args.img_size)
-                    all_preds.append(preds.data.cpu().numpy())
+                        all_preds_ncm.append(preds_ncm.data.cpu().numpy())
+                        all_preds_network.append(preds_network.data.cpu().numpy())
                     all_labels.append(labels.numpy())
-            all_preds = np.concatenate(all_preds, axis=0)
+
+            if (args.algo == "icarl" and not args.network) \
+                        or (args.algo == "e2e" and not args.ncm):
+                    
+                all_preds = np.concatenate(all_preds, axis=0)
+            elif (args.algo == "icarl" and args.network) \
+                        or (args.algo == "e2e" and args.ncm):
+                all_preds_ncm = np.concatenate(all_preds_ncm, axis=0)
+                all_preds_network = np.concatenate(all_preds_network, axis=0)
+
+
             all_labels = np.concatenate(all_labels, axis=0)
 
             for i in range(test_model.n_known):
-                class_preds = all_preds[all_labels == i]
-                correct = np.sum(class_preds == i)
-                total = len(class_preds)
-                acc_matr[i, s] = (100.0 * correct/total)
+                if (args.algo == "icarl" and not args.network) \
+                        or (args.algo == "e2e" and not args.ncm):
+                    class_preds = all_preds[all_labels == i]
+                    correct = np.sum(class_preds == i)
+                    total = len(class_preds)
+                elif (args.algo == "icarl" and args.network) \
+                        or (args.algo == "e2e" and args.ncm):
+                    class_preds_ncm = all_preds_ncm[all_labels == i]
+                    class_preds_network = \
+                        all_preds_network[all_labels == i]
+                    correct_ncm = np.sum(class_preds_ncm == i)
+                    correct_network = np.sum(class_preds_network == i)
+                    total = len(class_preds_ncm)
+                    
 
-            test_acc = np.mean(acc_matr[:test_model.n_known, s])
-            print('%.2f ,' % test_acc, file=file)
-            print('[Test Process] =======> Test Accuracy after %d'
+
+
+
+                if (args.algo == "icarl" and not args.network) \
+                        or (args.algo == "e2e" and not args.ncm):
+                    acc_matr[i, s] = (100.0 * correct/total)
+                elif (args.algo == "icarl" and args.network) \
+                        or (args.algo == "e2e" and args.ncm):
+                    acc_matr_ncm[i, s] = (100.0 * correct_ncm/total)
+                    acc_matr_network[i, s] = (100.0 * correct_network/total)
+
+            if (args.algo == "icarl" and not args.network) \
+                        or (args.algo == "e2e" and not args.ncm):
+                test_acc = np.mean(acc_matr[:test_model.n_known, s])
+                print('%.2f ,' % test_acc, file=file)
+                print('[Test Process] =======> Test Accuracy after %d'
                   ' learning exposures : ' %
                   (s + args.test_freq), test_acc)
+            elif (args.algo == "icarl" and args.network) \
+                        or (args.algo == "e2e" and args.ncm):
+                test_acc_ncm = np.mean(acc_matr_ncm[:test_model.n_known, s])
+                test_acc_network = np.mean(acc_matr_network[:test_model.n_known, s])
+
+                print('%.2f ,' % test_acc_ncm, file=file)
+                print('%.2f ,' % test_acc_network, file=file)
+
+                print('[Test Process] =======> Test Accuracy for NCM after %d'
+                      ' learning exposures : ' %
+                      (s + args.test_freq), test_acc_ncm)
+                print('[Test Process] =======> Test Accuracy for network output after %d'
+                      ' learning exposures : ' %
+                      (s + args.test_freq), test_acc_network)
 
             print("[Test Process] Saving model and other data")
             test_model.cpu()
@@ -537,8 +645,18 @@ def test_run(device):
             # loop var increment
             s += args.test_freq
 
-            np.savez('%s-matr.npz' % os.path.splitext(args.outfile)[0], 
+
+            if (args.algo == "icarl" and not args.network) \
+                        or (args.algo == "e2e" and not args.ncm):
+                np.savez('%s-matr.npz' % os.path.splitext(args.outfile)[0], 
                      acc_matr=acc_matr, 
+                     model_hyper_params=model.fetch_hyper_params(), 
+                     args=args, num_iters_done=s)
+            elif (args.algo == "icarl" and args.network) \
+                        or (args.algo == "e2e" and args.ncm):
+                np.savez('%s-matr.npz' % os.path.splitext(args.outfile)[0], 
+                     acc_matr_ncm=acc_matr_ncm,
+                     acc_matr_network=acc_matr_network, 
                      model_hyper_params=model.fetch_hyper_params(), 
                      args=args, num_iters_done=s)
 
