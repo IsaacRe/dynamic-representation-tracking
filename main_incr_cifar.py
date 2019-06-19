@@ -209,6 +209,13 @@ K = args.num_exemplars  # total number of exemplars
 
 model = IncrNet(args, device=train_device, cifar=True)
 
+assert total_classes % num_classes == 0
+
+def group_classes(classes):
+    if num_classes > 1:
+        return [classes[i:i+num_classes] for i in range(0, len(classes), num_classes)]
+    return classes
+
 # Randomly choose a subset of classes
 if batch_pt:
     perm_id = np.array(list(set(np.load(args.batch_coverage)['classes_seen'])))
@@ -225,16 +232,17 @@ print ("perm_id:", perm_id)
 if args.num_iters > args.total_classes:
     if not args.num_iters % args.total_classes == 0:
         raise Exception("Currently no support for num_iters%total_classes != 0")
-    
-    num_repetitions = args.num_iters//args.total_classes
+
+    # Multiply num_repetitions by number of classes per epoch to number of total learning exposures remains same
+    num_repetitions = args.num_iters // total_classes * num_classes
     perm_file = "permutation_files/permutation_%d_%d.npy" \
-                                    % (args.total_classes, num_repetitions)
+                                    % (total_classes, num_repetitions)
 
     if not os.path.exists(perm_file) and not args.fix_exposure:
         os.makedirs("permutation_files", exist_ok=True)
         # Create random permutation file and save
         perm_arr = np.array(num_repetitions 
-                            * list(np.arange(args.total_classes)))
+                            * list(np.arange(total_classes)))
         np.random.shuffle(perm_arr)
         np.save(perm_file, perm_arr)
     else:
@@ -243,27 +251,31 @@ if args.num_iters > args.total_classes:
     if not args.fix_exposure:
         perm_id_all = np.load(perm_file)
     else:
-        perm_id_all = np.array(num_repetitions * list(np.arange(args.total_classes)))
+        perm_id_all = np.array(num_repetitions * list(np.arange(total_classes)))
     print("PERM ID ALL: ===>", perm_id_all)
     for i in range(len(perm_id_all)):
         perm_id_all[i] = perm_id[perm_id_all[i]]
     perm_id = perm_id_all
 
+# Group classes together, returns list of length len(perm_id) / num_classes
+all_classes = list(set(perm_id))
+perm_id = group_classes(perm_id)
+
 train_set = iCIFAR100(args, root="./data",
                              train=True,
-                             classes=perm_id,
+                             n_classes=num_classes,
                              download=True,
                              transform=transform,
                              mean_image=mean_image)
 test_set = iCIFAR100(args, root="./data",
                              train=False,
-                             classes=perm_id,
+                             n_classes=num_classes,
                              download=True,
                              transform=None,
                              mean_image=mean_image)
 
-acc_matr = np.zeros((int(total_classes/num_classes), num_iters))
-coverage = np.zeros((int(total_classes/num_classes), num_iters))
+acc_matr = np.zeros((total_classes, num_iters))
+coverage = np.zeros((total_classes, num_iters))
 n_known = np.zeros(num_iters, dtype=np.int32)
 
 classes_seen = []
@@ -356,12 +368,20 @@ if args.resume or args.explr_start:
             assert os.path.exists(coverage_model), "Could not find model corresponding to specified coverage file"
             args.explr_model = coverage_model
         model_with_explrs = torch.load(args.explr_model, map_location=lambda storage, loc: storage)
+        assert set(model_with_explrs.classes) == set(all_classes)
+        all_classes = model_with_explrs.classes
         # Transfer exemplars to the newly created model
-        model.exemplar_sets = model_with_explrs.exemplar_sets
+        model.exemplar_sets = []
+        model.eset_le_maps = []
+        for explr, le_maps in zip(model_with_explrs.exemplar_sets, model_with_explrs.eset_le_maps):
+            num_sample = args.num_exemplars if args.fix_explr else args.num_exemplars // total_classes
+            assert explr.shape[0] >= num_sample
+            sample = np.random.choice(np.arange(explr.shape[0]), num_sample)
+            model.exemplar_sets += [explr[sample]]
+            model.eset_le_maps += [le_maps[sample]]
         num_explr = args.num_exemplars if not args.fix_explr else args.num_exemplars * total_classes
         assert len(model.exemplar_sets) * model.exemplar_sets[0].shape[0] == args.num_exemplars, \
             "Specified exemplar set does not match exemplar size provided"
-        model.eset_le_maps = model_with_explrs.eset_le_maps
         model.compute_means = True
         model.exemplar_means = model_with_explrs.exemplar_means
         model.n_occurrences = [0] * total_classes
@@ -386,7 +406,6 @@ if args.resume or args.explr_start:
         test_counter = mp.Value("i", num_iters_done)
 
         # initialize model with output channels for all classes
-        all_classes = list(set(perm_id))
         model.increment_classes(all_classes)
         all_model_classes = [model.classes_map[c] for c in all_classes]
 
@@ -430,29 +449,32 @@ def train_run(device):
             p.requires_grad = False
 
         curr_class = perm_id[s]
+        if not hasattr(curr_class, '__iter__'):
+            curr_class = [curr_class]
 
         classes_seen.append(curr_class)
-        curr_expanded = False
+        curr_expanded = []
+        for c in curr_class:
 
-        if curr_class not in model.classes_map:
-            model.increment_classes([curr_class])
-            model.cuda(device=device)
-            curr_expanded = True
+            if c not in model.classes_map:
+                model.increment_classes([c])
+                model.cuda(device=device)
+                curr_expanded += [c]
 
-        model_curr_class_idx = model.classes_map[curr_class]
+        model_curr_class_idx = [model.classes_map[c] for c in curr_class]
         model_classes_seen.append(model_curr_class_idx)
 
         # Load Datasets
         print("Loading training examples for"\
-              " class index %d , %s, at iteration %d" % 
-              (model_curr_class_idx, curr_class, s))
-        train_set.load_data_class([curr_class], [model_curr_class_idx], s)
+              " class indexes (%s), (%s), at iteration %d" %
+              (', '.join(map(lambda x: str(x), model_curr_class_idx)), ', '.join(map(lambda x: str(x), curr_class)), s))
+        train_set.load_data_class(curr_class, model_curr_class_idx, s)
 
         model.train()
 
         model.update_representation_icarl(train_set, \
                                           prev_model, \
-                                          [model_curr_class_idx], \
+                                          model_curr_class_idx, \
                                           args.num_workers)
         model.eval()
         del prev_model
@@ -461,26 +483,27 @@ def train_run(device):
         if not args.fix_explr:
             model.reduce_exemplar_sets(m)
         # Construct exemplar sets for current class
-        print("Constructing exemplar set for class index %d , %s ..." \
-            %(model_curr_class_idx, curr_class), end="")
-        images, le_maps = train_set.get_image_class(
+        print("Constructing exemplar set for class index (%s) , (%s) ..." %
+              (', '.join(map(lambda x: str(x), model_curr_class_idx)), ', '.join(map(lambda x: str(x), curr_class))),
+              end="")
+        images, le_maps = train_set.get_image_classes(
                 model_curr_class_idx)
-        mean_images = np.array([mean_image]*len(images))
-        model.construct_exemplar_set(images, \
-                                     mean_images, \
-                                     le_maps, None, m, \
-                                     model_curr_class_idx, s)
+        mean_images = np.array([mean_image]*len(images[0]))
+        model.construct_exemplar_sets(images,
+                                      mean_images,
+                                      le_maps, None, m,
+                                      model_curr_class_idx, s)
         model.n_known = model.n_classes
 
         n_known[s] = model.n_known
         print("Model num classes : %d, " % model.n_known)
-        
+
         if s > 0:
             coverage[:,s] = coverage[:,s-1]
         coverage[model_curr_class_idx,s] = \
-                            train_set.get_train_coverage(perm_id[s])
-        print("Coverage of current class now: ", \
-                    coverage[model_curr_class_idx,s])
+                            train_set.get_train_coverages(perm_id[s])
+        print("Coverage of current classes now: %s" %
+                    ', '.join(map(lambda x: str(x), coverage[model_curr_class_idx,s])))
 
         for y, P_y in enumerate(model.exemplar_sets):
             print("Exemplar set for class-%d:" % (y), P_y.shape)
@@ -490,7 +513,7 @@ def train_run(device):
 
         cond_var.acquire()
         train_counter.value += 1
-        if curr_expanded:
+        if len(curr_expanded) > 0:
             expanded_classes[s % args.test_freq] = model_curr_class_idx, curr_class
         else:
             expanded_classes[s % args.test_freq] = None
@@ -562,7 +585,7 @@ def test_run(device):
                 if expanded_class is not None:
                     model_cl, gt_cl = expanded_class
                     print("[Test Process] Loading test data")
-                    test_set.expand([model_cl], [gt_cl])
+                    test_set.expand(model_cl, gt_cl)
 
             print("[Test Process] Test Set Length:", len(test_set))
             
@@ -577,6 +600,7 @@ def test_run(device):
             print("%d, " % test_model.n_known, end="", file=file)
 
             print("[Test Process] Computing Accuracy matrix...")
+            # TODO make sure computing and storing accuracies currectly during multi-class per exposure
             all_labels = []
             if (args.algo == "icarl" and not args.network) \
                         or (args.algo == "e2e" and not args.ncm):

@@ -24,6 +24,9 @@ parser.add_argument('--plot_names', type=str, nargs='*',
                     help='Optionally specify display in plot legend for each model')
 parser.add_argument('--shift', action='store_true', help="Number to shift accuracy plot along x axis by")
 parser.add_argument('--batch', action='store_true', help='Flag when plotting accs of batch learner')
+parser.add_argument('--no_count', action='store_false', dest='counter',
+                    help='Whether to calculate accuracies over all classes (not just seen)')
+parser.add_argument('--network', action='store_true', help='Use network accuracies if available')
 
 # Class Accuracy Args
 parser.add_argument('--smoothing_margin', type=int, default=0,
@@ -473,9 +476,15 @@ def plot_accs(args):
     ax1.grid()
 
     for j, datafile in enumerate(datafiles):
-        acc_matr = info_matr[j]['acc_matr'][:, :num_le]
+        matr_str = 'acc_matr'
+        if 'acc_matr_network' in info_matr[j].files:
+            if args.network:
+                matr_str += '_network'
+            else:
+                matr_str +=  '_ncm'
+        acc_matr = info_matr[j][matr_str][:, :num_le]
         counter = []
-        if not args.batch:
+        if not args.batch and args.counter:
             cnt = 0
             for i in range(len(classes[j])):
                 if classes[j][i] in classes[j][:i]:

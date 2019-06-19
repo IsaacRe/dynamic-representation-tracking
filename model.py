@@ -255,6 +255,9 @@ class IncrNet(nn.Module):
             return preds_ncm, preds_network
 
     def classify_ncm(self, x, mean_image, img_size):
+        # if we have no exemplars we cannot conduct ncm classification
+        if self.exemplar_sets[0].shape[0] == 0:
+            return torch.Tensor([-1] * x.shape[0]).cuda(self.device)
         batch_size = x.size(0)
 
         if self.compute_means:
@@ -297,6 +300,30 @@ class IncrNet(nn.Module):
                                  dim=1, keepdim=False)
         return preds
 
+    def construct_exemplar_sets(self, images, image_means, le_maps,
+                                image_bbs, m, cl, curr_iter, overwrite=False):
+        '''
+        Construct exemplar sets for each class given images
+        Args:
+            images: list containing np.array of images for each class
+            image_means: cropped out parts of the dataset mean image for
+                         image patches
+            le_maps: list containing np.array of learning exposure indices and
+                     frame indices within them of images for each class
+            image_bbs: list containing np.array of image bounding boxes
+                       for each class
+            m: number of images in each exemplar set
+            cl: class indices in self.classes of for each exemplar set
+            curr_iter: learning exposure index
+            overwrite: Boolean to keep track of whether the exemplar set is
+                       being constructed after finetuning (not a repeated
+                       exposure)
+        '''
+        if image_bbs is None:
+            image_bbs = [None] * len(images)
+        for c, image, le_map, image_bb in zip(cl, images, le_maps, image_bbs):
+            self.construct_exemplar_set(image, image_means, le_map,
+                                        image_bb, m, c, curr_iter, overwrite=overwrite)
 
     def construct_exemplar_set(self, images, image_means, le_maps, 
                                image_bbs, m, cl, curr_iter, overwrite=False):

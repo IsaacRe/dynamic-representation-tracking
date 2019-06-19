@@ -9,7 +9,7 @@ import copy
 from collections import Counter
 
 class iCIFAR10(CIFAR10):
-    def __init__(self, args, root, classes,
+    def __init__(self, args, root, n_classes,
                  train=True,
                  transform=None,
                  target_transform=None,
@@ -41,6 +41,10 @@ class iCIFAR10(CIFAR10):
         self.num_exemplars = args.num_exemplars
         # weights for minibatch sampler
         self.sample = args.sample
+        self.n_classes = n_classes
+
+        num_train = self.num_e_frames * self.n_classes
+        self.num_train = num_train
 
         # Select a subset of classes for incremental training and testing
         if self.train:
@@ -64,15 +68,15 @@ class iCIFAR10(CIFAR10):
             if self.aug == "icarl" or self.aug == "e2e":
                 self.train_data, self.train_labels = [], [] 
                 # e_maps keeps track of new images in the current learning exposure with regard to images from the exemplar set
-                self.e_maps = -np.ones((self.num_e_frames,2), dtype=np.int32)
-                self.weights = np.ones(self.num_e_frames, dtype=float)
+                self.e_maps = -np.ones((num_train,2), dtype=np.int32)
+                self.weights = np.ones(num_train, dtype=float)
 
             elif self.aug == "e2e_full":
-                self.train_data, self.train_labels = np.zeros((12*(self.num_e_frames+self.num_exemplars),3,self.img_size,self.img_size), dtype=np.uint8), []
+                self.train_data, self.train_labels = np.zeros((12*(self.num_train+self.num_exemplars),3,self.img_size,self.img_size), dtype=np.uint8), []
                 self.curr_len = 0
                 self.curr_orig_len = 0
-                self.e_maps = -np.ones((12*(self.num_e_frames+self.num_exemplars),2), dtype=np.int32)
-                self.weights = np.ones(12*(self.num_e_frames+self.num_exemplars), dtype=float)
+                self.e_maps = -np.ones((12*(self.num_train+self.num_exemplars),2), dtype=np.int32)
+                self.weights = np.ones(12*(self.num_train+self.num_exemplars), dtype=float)
 
 
 
@@ -201,12 +205,12 @@ class iCIFAR10(CIFAR10):
             train_data = []
             train_labels = []
             if self.aug == "icarl" or self.aug == "e2e":
-                self.e_maps = -np.ones((self.num_e_frames,2), dtype=np.int32)
+                self.e_maps = -np.ones((self.num_train,2), dtype=np.int32)
             elif self.aug == "e2e_full":
-                self.train_data, self.train_labels = np.zeros((12*(self.num_e_frames+self.num_exemplars),3,self.img_size,self.img_size), dtype=np.uint8), []
+                self.train_data, self.train_labels = np.zeros((12*(self.num_train+self.num_exemplars),3,self.img_size,self.img_size), dtype=np.uint8), []
                 self.curr_len = 0
-                self.e_maps = -np.ones((12*(self.num_e_frames+self.num_exemplars),2), dtype=np.int32) 
-            for (gt_label, model_label) in zip(classes, model_classes):
+                self.e_maps = -np.ones((12*(self.num_train+self.num_exemplars),2), dtype=np.int32)
+            for i, (gt_label, model_label) in enumerate(zip(classes, model_classes)):
                 rand = np.random.choice(500, self.num_e_frames, replace = self.s_w_replace)
 
                 s_ind = np.where( \
@@ -221,8 +225,8 @@ class iCIFAR10(CIFAR10):
 
                 self.all_train_coverage[s_ind[rand]] = True
 
-                self.e_maps[:self.num_e_frames,0] = iteration
-                self.e_maps[:self.num_e_frames,1] = s_ind[rand]
+                self.e_maps[i*self.num_e_frames:(i+1)*self.num_e_frames,0] = iteration
+                self.e_maps[i*self.num_e_frames:(i+1)*self.num_e_frames,1] = s_ind[rand]
 
             if self.aug == "icarl" or self.aug == "e2e":
                 self.train_data = np.concatenate(np.array(train_data, \
@@ -230,12 +234,12 @@ class iCIFAR10(CIFAR10):
                 self.train_labels = np.concatenate(np.array(train_labels, \
                     dtype=np.int32), axis=0).tolist()
             elif self.aug == 'e2e_full':
-                self.train_data[:self.num_e_frames] = np.concatenate(np.array(train_data, \
+                self.train_data[:self.num_train] = np.concatenate(np.array(train_data, \
                     dtype=np.uint8),axis=0)
                 self.train_labels = np.concatenate(np.array(train_labels, \
                     dtype=np.int32), axis=0).tolist()
-                self.curr_len = self.num_e_frames
-                self.curr_orig_len = self.num_e_frames 
+                self.curr_len = self.num_train
+                self.curr_orig_len = self.num_train
 
 
     def expand(self, model_new_classes, gt_new_classes):
@@ -273,6 +277,16 @@ class iCIFAR10(CIFAR10):
                     self.test_labels = np.concatenate( \
                         [self.test_labels, test_labels], axis=0).tolist()
 
+    def get_train_coverages(self, labels):
+        """
+        Returns list of covergages of specified labels, using get_train_coverage
+        :param labels: list of specified labels
+        :return: list of coverages
+        """
+        if type(labels) is list:
+            return [self.get_train_coverage(l) for l in labels]
+        return self.get_train_coverage(labels)
+
     def get_train_coverage(self, label):
         """Returns the coverage of requested label. Coverage is calculated based on the number of images the model has seen for this label / the total number of images of this label
         Args:
@@ -282,6 +296,15 @@ class iCIFAR10(CIFAR10):
         num_images_covered = self.all_train_coverage[np.array(self.all_train_labels) == label].sum()
 
         return num_images_covered*100./ num_images_label
+
+    def get_image_classes(self, labels):
+        """
+        Returns the images and e_maps of the requested list of labels
+        :param labels: list of requested labels
+        :return: images, e_maps
+        """
+        images, e_maps = zip(*[self.get_image_class(l) for l in labels])
+        return images, e_maps
 
     def get_image_class(self, label):
         """Returns the images and e_maps of the requested label
