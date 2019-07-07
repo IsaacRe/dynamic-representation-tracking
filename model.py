@@ -420,6 +420,17 @@ class IncrNet(nn.Module):
             if not self.cifar:
                 self.exemplar_bbs[y] = self.exemplar_bbs[y][:m]
 
+    def reduce_exemplar_sets_full_explrs(self, n_explrs_class):
+        '''
+        Shrink each exemplar set to size m, keeping only the 
+        top m ranked by herding
+        '''
+        for y, P_y in enumerate(self.exemplar_sets):
+            self.exemplar_sets[y] = P_y[:n_explrs_class[y]]
+            self.eset_le_maps[y] = self.eset_le_maps[y][:n_explrs_class[y]]
+            if not self.cifar:
+                self.exemplar_bbs[y] = self.exemplar_bbs[y][:n_explrs_class[y]]
+
     def combine_dataset_with_exemplars(self, dataset):
         '''
         Add exemplars to dataset for training

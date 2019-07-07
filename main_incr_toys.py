@@ -393,7 +393,13 @@ def train_run(device):
         if (args.algo == 'icarl' or args.algo == 'e2e') and args.num_exemplars > 0:
             # Reduce exemplar sets for known classes
             if not args.fixed_ex:
-                model.reduce_exemplar_sets(m)
+                if args.full_explr:
+                    n_explrs_classes = np.ones(model.n_classes, dtype=np.int32)*m
+                    remainder = K - model.n_classes*int(K/model.n_classes)
+                    n_explrs_classes[:remainder] += 1
+                    model.reduce_exemplar_sets_full_explrs(n_explrs_classes)
+                else:
+                    model.reduce_exemplar_sets(m)
 
             # Construct exemplar sets for current class
             print('Constructing exemplar set for class index %d , %s ...' %
@@ -403,7 +409,11 @@ def train_run(device):
 
                 images, image_means, le_maps, image_bbs = train_set.get_image_class(
                     model_curr_class_idx)
-                model.construct_exemplar_set(images, image_means, le_maps, 
+                if args.full_explr:
+                    model.construct_exemplar_set(images, image_means, le_maps, 
+                                         image_bbs, n_explrs_classes[model_curr_class_idx], model_curr_class_idx, s)
+                else:
+                    model.construct_exemplar_set(images, image_means, le_maps, 
                                          image_bbs, m, model_curr_class_idx, s)
             else:
                 if model_curr_class_idx >= model.n_known:
