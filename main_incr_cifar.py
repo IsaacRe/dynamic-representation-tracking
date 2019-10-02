@@ -715,6 +715,8 @@ def test_run(device):
                      acc_matr_network=acc_matr_network, 
                      model_hyper_params=model.fetch_hyper_params(), 
                      args=args, num_iters_done=s)
+
+            file.flush()
             
         print("[Test Process] Done, total time spent waiting : ", 
               test_wait_time)

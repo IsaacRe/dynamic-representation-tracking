@@ -27,6 +27,8 @@ parser.add_argument('--batch', action='store_true', help='Flag when plotting acc
 parser.add_argument('--no_count', action='store_false', dest='counter',
                     help='Whether to calculate accuracies over all classes (not just seen)')
 parser.add_argument('--network', action='store_true', help='Use network accuracies if available')
+parser.add_argument('--jump-start', action='store_true',
+                    help="Whether accuracies were calculated across all classes from beginning (do not track UOS)")
 
 # Class Accuracy Args
 parser.add_argument('--smoothing_margin', type=int, default=0,
@@ -461,7 +463,7 @@ def plot_accs(args):
     all_lines = []
 
     ax1.set_xlabel('Number of epochs')
-    ax1.set_ylabel('% Test accuracy over seen objects')
+    ax1.set_ylabel('% Test accuracy over all objects')
     ax1.set_yticks(np.arange(0, 105, 10))
     ax1.set_ylim([0, 105])
 
@@ -481,7 +483,7 @@ def plot_accs(args):
             if args.network:
                 matr_str += '_network'
             else:
-                matr_str +=  '_ncm'
+                matr_str += '_ncm'
         acc_matr = info_matr[j][matr_str][:, :num_le]
         counter = []
         if not args.batch and args.counter:
@@ -503,13 +505,16 @@ def plot_accs(args):
         test_acc = np.sum(acc_matr, axis=0) / np.array(counter)
         print(test_acc)
 
-        if not args.batch:
+        if not args.batch and args.counter:
             all_lines.append(ax2.plot(np.arange(0, num_le), counter,
                                       linestyle=':', linewidth=dotted_line_width,
                                       label='Ground-truth UOS')[0])
         all_lines.append(ax1.plot(np.arange(0, num_le), test_acc,
                                   label=datafile.split('.')[0].split('/')[-1].replace('_', ' '), linestyle='-')[0])
 
+    # Plot batch accuracy
+    batch_acc = 92.
+    all_lines.append(ax1.scatter(num_le, batch_acc, marker='x', color='black', s=args.range[-1], alpha=1., label='Batch Accuracy'))
 
     all_labels = [l.get_label() for l in all_lines] 
     plt.title(args.experiment_id + ' Class Acc. after Training')
