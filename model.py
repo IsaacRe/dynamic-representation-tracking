@@ -143,6 +143,9 @@ class IncrNet(nn.Module):
         self.batch_pt = True
         model = torch.load(model_file,
                            map_location=lambda storage, loc: storage)
+        if type(model) == IncrNet:
+            # if we've loaded an IncrNet model, just get the resnet model
+            model = model._modules['model']
         self.model = model
         self.model.fc = self.fc
         self.feature_extractor = nn.Sequential(
@@ -299,6 +302,34 @@ class IncrNet(nn.Module):
         _, preds = torch.max(torch.softmax(self.forward(x), dim=1), 
                                  dim=1, keepdim=False)
         return preds
+
+    def train_fc(self, args, loader):
+        optimizer = optim.SGD(self.fc.parameters(), lr=args.ft_fc_lr,
+                              momentum=self.momentum,
+                              weight_decay=self.weight_decay)
+        with tqdm(total=len(loader)*args.ft_fc_epochs) as pbar:  # with tqdm(total=args.n*args.ft_fc_epochs) as pbar:
+            for e in range(args.ft_fc_epochs):
+                for k, (i, x, y) in enumerate(loader):
+                    x, y = Variable(x).cuda(device=self.device), Variable(y).cuda(device=self.device)
+                    optimizer.zero_grad()
+                    with torch.no_grad():
+                        x = self.feature_extractor(x)
+                    x = x.view(x.size(0), -1)
+                    out = self.fc(x)
+
+                    loss = self.ce_loss(out, y)
+                    loss.backward(retain_graph=False)
+                    optimizer.step()
+
+                    """
+                    loss_ = float(loss.data.item())
+                    length = len(loader)
+                    tqdm.write('FT-FC Epoch [%d/%d], Minibatch [%d/%d] Loss: %.4f'
+                               % (e, args.ft_fc_epochs,
+                                  i % length + 1,
+                                  length, loss_))
+                    """
+                    pbar.update(1)
 
     def construct_exemplar_sets(self, images, image_means, le_maps,
                                 image_bbs, m, cl, curr_iter, overwrite=False):
@@ -524,9 +555,17 @@ class IncrNet(nn.Module):
             dataset, batch_sampler=batch_sampler, num_workers=0 if self.debug else num_workers,
             pin_memory=True)
 
+        class Namespace:
+            pass
+        args = Namespace()
+        args.ft_fc_epochs = 1
+        args.ft_fc_lr = 0.002
+        args.n = num_batches_per_epoch
+        #self.train_fc(args, loader)
+
         print("Length of current data + exemplars : ", len(dataset))
         optimizer = optim.SGD(self.parameters(), lr=lr,
-                              momentum=self.momentum, 
+                              momentum=self.momentum,
                               weight_decay=self.weight_decay)
 
         # label matrix

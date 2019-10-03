@@ -15,6 +15,7 @@ import sys
 import pdb
 
 from dataset_incr_cifar import iCIFAR10, iCIFAR100
+from dataset_batch_cifar import CIFAR20
 
 parser = argparse.ArgumentParser(description="Incremental learning")
 
@@ -128,6 +129,14 @@ parser.add_argument("--aug", default="icarl", type=str,
 parser.add_argument("--s_wo_rep", dest="sample_w_replacement", action="store_false",
                     help="Sampling train data with replacement")
 
+# Finetune final FC options
+parser.add_argument('--ft_fc', action='store_true',
+                    help='Whether to conduct training on final fc after each lexp')
+parser.add_argument('--ft_fc_epochs', type=int, default=10,
+                    help='Number of epochs to finetune fc layer on')
+parser.add_argument('--ft_fc_lr', type=float, default=0.002,
+                    help='Lr for fc layer finetuning')
+
 # System options
 parser.add_argument("--test_freq", default=1, type=int,
                     help="Number of iterations of training after"
@@ -162,6 +171,8 @@ if len(sys.argv)==1:
     sys.exit(1)
 
 args = parser.parse_args()
+if args.debug:
+    args.num_workers = 1
 torch.backends.cudnn.benchmark = True
 mp.set_sharing_strategy("file_system")
 expt_githash = subprocess.check_output(["git", "describe", "--always"])
@@ -175,9 +186,11 @@ if args.one_gpu:
 
 # GPU indices
 train_device = 0
-test_device = 1
+train_fc_device = 1
+test_device = 2
 if args.one_gpu:
     test_device = 0
+    train_fc_device = 0
 
 if not os.path.exists(os.path.dirname(args.outfile)):
     if len(os.path.dirname(args.outfile)) != 0:
@@ -195,6 +208,7 @@ num_iters = args.num_iters
 # Conditional variable, shared vars for synchronization
 cond_var = mp.Condition()
 train_counter = mp.Value("i", 0)
+train_fc_counter = mp.Value("i", 0)
 test_counter = mp.Value("i", 0)
 dataQueue = mp.Queue()
 all_done = mp.Event()
@@ -208,6 +222,8 @@ else:
 K = args.num_exemplars  # total number of exemplars
 
 model = IncrNet(args, device=train_device, cifar=True)
+if args.resume_outfile:
+    model.from_resnet(args.resume_outfile)
 
 assert total_classes % num_classes == 0
 
@@ -273,8 +289,18 @@ test_set = iCIFAR100(args, root="./data",
                              download=True,
                              transform=None,
                              mean_image=mean_image)
+train_fc_set = CIFAR20(args, all_classes,
+                       root='./data',
+                       train=True,
+                       download=True,
+                       transform=transform,
+                       mean_image=mean_image)
 
+print(len(train_set))
+print(num_classes)
 acc_matr = np.zeros((total_classes, num_iters))
+if args.ft_fc:
+    acc_matr_fc = np.zeros_like(acc_matr)
 coverage = np.zeros((total_classes, num_iters))
 n_known = np.zeros(num_iters, dtype=np.int32)
 
@@ -434,7 +460,8 @@ def train_run(device):
         # Do not start training till test process catches up
         cond_var.acquire()
         # while loop to avoid spurious wakeups
-        while test_counter.value + args.test_freq <= train_counter.value:
+        while test_counter.value + args.test_freq <= train_counter.value or \
+                train_fc_counter.value + args.test_freq <= train_counter.value:
             print("[Train Process] Waiting on test process")
             print("[Train Process] train_counter : ", train_counter.value)
             print("[Train Process] test_counter : ", test_counter.value)
@@ -537,11 +564,97 @@ def train_run(device):
                  exemplar_data=np.array(exemplar_data))
         # loop var increment
         s += 1
+
+        # TODO ft-fc
+        sys.exit()
     
     time_ptr = time.time()
     all_done.wait()
     train_wait_time += time.time() - time_ptr
     print("[Train Process] Done, total time spent waiting : ", train_wait_time)
+
+
+def train_fc_run(device):
+    train_model = None
+    s = args.test_freq * (len(classes_seen) // args.test_freq)
+
+    wait_time = 0
+    with open('%s-fc.csv' % args.outfile.split('.')[0], 'w+') as file:
+        print("Learning Exposure, Test Accuracy", file=file)
+
+        while s < args.num_iters:
+
+            # Wait till training done
+            time_ptr = time.time()
+            cond_var.acquire()
+            while train_counter.value < train_fc_counter.value + args.test_freq:
+                print("[Train-fc Process] Waiting on train process")
+                print("[Train-fc Process] train_counter : ", train_counter.value)
+                print("[Train-fc Process] train_fc_counter : ", train_fc_counter.value)
+                cond_var.wait()
+            cond_var.release()
+            wait_time += time.time() - time_ptr
+
+            cond_var.acquire()
+            train_model = dataQueue.get()
+            # requeue the model for test process
+            dataQueue.put(copy.deepcopy(train_model))
+            train_fc_counter.value += args.test_freq
+            cond_var.notify_all()
+            cond_var.release()
+
+            train_model.device = device
+            train_model.cuda(device=device)
+            train_model.train()
+            train_loader = torch.utils.data.DataLoader(train_fc_set,
+                                                       batch_size=args.batch_size, shuffle=True,
+                                                       num_workers=0 if args.debug else args.num_workers,
+                                                       pin_memory=True)
+            test_loader = torch.utils.data.DataLoader(test_set,
+                                                      batch_size=args.batch_size_test, shuffle=False,
+                                                      num_workers=0 if args.debug else args.num_workers,
+                                                      pin_memory=True)
+
+            print('[Train-fc Process] Training final fc layer...')
+            train_model.train_fc(args, train_loader)
+            train_model.eval()
+            all_preds = []
+            all_labels = []
+            with torch.no_grad():
+                for indices, images, labels in test_loader:
+                    images = Variable(images).cuda(device=device)
+                    preds = train_model.classify(images, mean_image, args.img_size)
+                    # take only the network predictions
+                    if type(preds) is tuple:
+                        _, preds = preds
+                    all_preds += [preds.data.cpu().numpy()]
+                    all_labels += [labels.numpy()]
+            all_preds = np.concatenate(all_preds, axis=0)
+            all_labels = np.concatenate(all_labels, axis=0)
+            for i in range(total_classes):
+                preds = all_preds[all_labels == i]
+                accuracy = 100. * np.sum(preds == i) / np.sum(all_labels == i)
+                acc_matr_fc[i, s] = accuracy
+            test_acc = np.mean(acc_matr_fc[:, s])
+            print(test_acc)
+
+            s += args.test_freq
+
+            print('[Train-fc Process] Saving Accuracy')
+
+            np.save('%s-fc-matr.npz' % os.path.splitext(args.outfile)[0],
+                    acc_matr_fc)
+
+            print("%d, %.2f" % (s, test_acc), file=file)
+            file.flush()
+
+            # TODO test necessary number of ft epochs
+            sys.exit()
+
+        # TODO change all_done for other run methods
+        print("[Train-fc Process] Done, total time spent waiting : ", wait_time)
+        all_done.set()
+
 
 def test_run(device):
     global test_set
@@ -562,7 +675,8 @@ def test_run(device):
             # Wait till training is done
             time_ptr = time.time()
             cond_var.acquire()
-            while train_counter.value < test_counter.value + args.test_freq:
+            while train_counter.value < test_counter.value + args.test_freq or \
+                    (args.ft_fc and train_fc_counter.value <= test_counter.value):
                 print("[Test Process] Waiting on train process")
                 print("[Test Process] train_counter : ", train_counter.value)
                 print("[Test Process] test_counter : ", test_counter.value)
@@ -717,10 +831,14 @@ def test_run(device):
                      args=args, num_iters_done=s)
 
             file.flush()
+
+            # TODO test ft epochs
+            sys.exit()
             
         print("[Test Process] Done, total time spent waiting : ", 
               test_wait_time)
         all_done.set()
+
 
 def cleanup(train_process, test_process):
     train_process.terminate()
@@ -729,10 +847,13 @@ def cleanup(train_process, test_process):
 
 def main():
     train_process = mp.Process(target=train_run, args=(train_device,))
+    train_fc_process = mp.Process(target=train_fc_run, args=(train_fc_device,))
     test_process = mp.Process(target=test_run, args=(test_device,))
     atexit.register(cleanup, train_process, test_process)
     train_process.start()
     test_process.start()
+    if args.ft_fc:
+        train_fc_process.start()
 
     train_process.join()
     print("Train Process Completed")
