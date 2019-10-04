@@ -192,6 +192,7 @@ train_fc_device = 1
 test_device = 2
 if args.one_gpu:
     test_device = 0
+    train_fc_device = 0
 
 if not os.path.exists(os.path.dirname(args.outfile)):
     if len(os.path.dirname(args.outfile)) != 0:
