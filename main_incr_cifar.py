@@ -187,12 +187,18 @@ if args.one_gpu:
     mp.get_context("spawn")
 
 # GPU indices
-train_device = 0
-train_fc_device = 1
-test_device = 2
-if args.one_gpu:
-    test_device = 0
-    train_fc_device = 0
+if args.ft_fc:
+    train_device = 0
+    train_fc_device = 1
+    test_device = 2
+    if args.one_gpu:
+        test_device = 0
+        train_fc_device = 0
+else:
+    train_device = 0
+    test_device = 1
+    if args.one_gpu:
+        test_device = 0
 
 if not os.path.exists(os.path.dirname(args.outfile)):
     if len(os.path.dirname(args.outfile)) != 0:
