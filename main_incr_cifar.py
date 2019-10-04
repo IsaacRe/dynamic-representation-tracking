@@ -385,53 +385,58 @@ if args.resume or args.explr_start:
         for p in model.parameters():
             p.requires_grad = True
     else:
-        print("resuming model from %s-model.pth.tar" %
-              os.path.splitext(args.outfile)[0])
+        if args.num_exemplars > 0:
+            print("resuming model from %s-model.pth.tar" %
+                  os.path.splitext(args.outfile)[0])
 
-        if args.resume:
-            model.from_resnet("%s-model.pth.tar" % os.path.splitext(args.outfile)[0])
+            if args.resume:
+                model.from_resnet("%s-model.pth.tar" % os.path.splitext(args.outfile)[0])
 
-        if args.explr_model is None:
-            coverage_model = '%s-model.pth.tar' % (args.batch_coverage.split('-coverage')[0])
-            assert os.path.exists(coverage_model), "Could not find model corresponding to specified coverage file"
-            args.explr_model = coverage_model
-        model_with_explrs = torch.load(args.explr_model, map_location=lambda storage, loc: storage)
-        assert set(model_with_explrs.classes) == set(all_classes)
-        all_classes = model_with_explrs.classes
-        # Transfer exemplars to the newly created model
-        model.exemplar_sets = []
-        model.eset_le_maps = []
-        for explr, le_maps in zip(model_with_explrs.exemplar_sets, model_with_explrs.eset_le_maps):
-            num_sample = args.num_exemplars if args.fix_explr else args.num_exemplars // total_classes
-            assert explr.shape[0] >= num_sample
-            sample = np.random.choice(np.arange(explr.shape[0]), num_sample)
-            model.exemplar_sets += [explr[sample]]
-            model.eset_le_maps += [le_maps[sample]]
-        num_explr = args.num_exemplars if not args.fix_explr else args.num_exemplars * total_classes
-        assert len(model.exemplar_sets) * model.exemplar_sets[0].shape[0] == args.num_exemplars, \
-            "Specified exemplar set does not match exemplar size provided"
-        model.compute_means = True
-        model.exemplar_means = model_with_explrs.exemplar_means
-        model.n_occurrences = [0] * total_classes
+                # Ensuring requires_grad = True after model reload
+                for p in model.parameters():
+                    p.requires_grad = True
 
-        model.num_iters_done = 0
-        if args.resume:
-            info_matr = np.load("%s-matr.npz" % os.path.splitext(args.outfile)[0])
-            args_resume_outfile = args.resume_outfile
+            if args.explr_model is None:
+                coverage_model = '%s-model.pth.tar' % (args.batch_coverage.split('-coverage')[0])
+                assert os.path.exists(coverage_model), "Could not find model corresponding to specified coverage file"
+                args.explr_model = coverage_model
+            model_with_explrs = torch.load(args.explr_model, map_location=lambda storage, loc: storage)
+            assert set(model_with_explrs.classes) == set(all_classes)
+            all_classes = model_with_explrs.classes
+            # Transfer exemplars to the newly created model
+            model.exemplar_sets = []
+            model.eset_le_maps = []
+            for explr, le_maps in zip(model_with_explrs.exemplar_sets, model_with_explrs.eset_le_maps):
+                num_sample = args.num_exemplars if args.fix_explr else args.num_exemplars // total_classes
+                assert explr.shape[0] >= num_sample
+                sample = np.random.choice(np.arange(explr.shape[0]), num_sample)
+                model.exemplar_sets += [explr[sample]]
+                model.eset_le_maps += [le_maps[sample]]
+            num_explr = args.num_exemplars if not args.fix_explr else args.num_exemplars * total_classes
+            assert len(model.exemplar_sets) * model.exemplar_sets[0].shape[0] == args.num_exemplars, \
+                "Specified exemplar set does not match exemplar size provided"
+            model.compute_means = True
+            model.exemplar_means = model_with_explrs.exemplar_means
+            model.n_occurrences = [0] * total_classes
+
             model.num_iters_done = 0
+            if args.resume:
+                info_matr = np.load("%s-matr.npz" % os.path.splitext(args.outfile)[0])
+                args_resume_outfile = args.resume_outfile
+                model.num_iters_done = 0
+                num_iters_done = model.num_iters_done
+                new_args = info_matr["args"].item()
+                for k, v in new_args.__dict__.items():
+                    args.__dict__[k] = v
+
+                if args_resume_outfile is not None:
+                    args.outfile = args.resume_outfile = args_resume_outfile
+                else:
+                    print("Overwriting old files")
             num_iters_done = model.num_iters_done
-            new_args = info_matr["args"].item()
-            for k, v in new_args.__dict__.items():
-                args.__dict__[k] = v
 
-            if args_resume_outfile is not None:
-                args.outfile = args.resume_outfile = args_resume_outfile
-            else:
-                print("Overwriting old files")
-        num_iters_done = model.num_iters_done
-
-        train_counter = mp.Value("i", num_iters_done)
-        test_counter = mp.Value("i", num_iters_done)
+            train_counter = mp.Value("i", num_iters_done)
+            test_counter = mp.Value("i", num_iters_done)
 
         # initialize model with output channels for all classes
         model.increment_classes(all_classes)
@@ -441,10 +446,6 @@ if args.resume or args.explr_start:
         for mdl_cl, gt_cl in zip(all_model_classes, all_classes):
             print("Expanding class for resuming : %d, %d" %(mdl_cl, gt_cl))
             test_set.expand([mdl_cl], [gt_cl])
-
-        # Ensuring requires_grad = True after model reload
-        for p in model.parameters():
-            p.requires_grad = True
 
 
 def train_run(device):
