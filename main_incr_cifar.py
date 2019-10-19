@@ -384,6 +384,11 @@ if args.resume or args.explr_start:
 
         # expanding test set to everything seen earlier
         for mdl_cl, gt_cl in zip(model_classes_seen, classes_seen):
+            """
+            # expanding test set to everything seen earlier
+            for i, (mdl_cl, gt_cl) in enumerate(zip(model_classes_seen, classes_seen)):
+                if mdl_cl not in model_classes_seen[:i]:
+            """
             print("Expanding class for resuming : %d, %d" %(mdl_cl, gt_cl))
             test_set.expand([mdl_cl], [gt_cl])
 

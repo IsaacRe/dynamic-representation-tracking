@@ -226,7 +226,7 @@ exemplar_data = []  # Exemplar set information stored by the model
 # acc_matr row index represents class number and column index represents
 # learning exposure.
 if (args.algo == "icarl" and not args.network) \
-                        or (args.algo == "e2e" and not args.ncm):
+                        or (args.algo == "e2e" and not args.ncm) or args.num_exemplars == 0:
     acc_matr = np.zeros((args.total_classes, args.num_iters))
 elif (args.algo == "icarl" and args.network) \
                         or (args.algo == "e2e" and args.ncm):
@@ -280,7 +280,7 @@ if args.resume:
     perm_id = info_classes['perm_id']
     num_iters_done = info_matr['num_iters_done']
     if (args.algo == "icarl" and not args.network) \
-                        or (args.algo == "e2e" and not args.ncm):
+                        or (args.algo == "e2e" and not args.ncm) or args.num_exemplars == 0:
         acc_matr = info_matr['acc_matr']
     elif (args.algo == "icarl" and args.network) \
                         or (args.algo == "e2e" and args.ncm):
@@ -396,10 +396,16 @@ def train_run(device):
 
         m = int(K / model.n_classes)
 
-        if args.algo == 'icarl' or args.algo == 'e2e':
+        if (args.algo == 'icarl' or args.algo == 'e2e') and args.num_exemplars > 0:
             # Reduce exemplar sets for known classes
             if not args.fixed_ex:
-                model.reduce_exemplar_sets(m)
+                if args.full_explr:
+                    n_explrs_classes = np.ones(model.n_classes, dtype=np.int32)*m
+                    remainder = K - model.n_classes*int(K/model.n_classes)
+                    n_explrs_classes[:remainder] += 1
+                    model.reduce_exemplar_sets_full_explrs(n_explrs_classes)
+                else:
+                    model.reduce_exemplar_sets(m)
 
             # Construct exemplar sets for current class
             print('Constructing exemplar set for class index %d , %s ...' %
@@ -409,7 +415,11 @@ def train_run(device):
 
                 images, image_means, le_maps, image_bbs = train_set.get_image_class(
                     model_curr_class_idx)
-                model.construct_exemplar_set(images, image_means, le_maps, 
+                if args.full_explr:
+                    model.construct_exemplar_set(images, image_means, le_maps, 
+                                         image_bbs, n_explrs_classes[model_curr_class_idx], model_curr_class_idx, s)
+                else:
+                    model.construct_exemplar_set(images, image_means, le_maps, 
                                          image_bbs, m, model_curr_class_idx, s)
             else:
                 if model_curr_class_idx >= model.n_known:
@@ -491,7 +501,7 @@ def test_run(device):
     test_wait_time = 0
     with open(args.outfile, 'w') as file:
         if (args.algo == "icarl" and not args.network) \
-                        or (args.algo == "e2e" and not args.ncm):
+                        or (args.algo == "e2e" and not args.ncm) or args.num_exemplars == 0:
             print("Model classes, Test Accuracy", file=file)
         elif (args.algo == "icarl" and args.network) \
                         or (args.algo == "e2e" and args.ncm):
@@ -544,7 +554,7 @@ def test_run(device):
             all_labels = []
 
             if (args.algo == "icarl" and not args.network) \
-                        or (args.algo == "e2e" and not args.ncm):
+                        or (args.algo == "e2e" and not args.ncm) or args.num_exemplars == 0:
                 
                 all_preds = []
             elif (args.algo == "icarl" and args.network) \
@@ -556,7 +566,7 @@ def test_run(device):
                 for indices, images, labels, _ in test_loader:
                     images = Variable(images).cuda(device=device)
                     if (args.algo == "icarl" and not args.network) \
-                        or (args.algo == "e2e" and not args.ncm):
+                        or (args.algo == "e2e" and not args.ncm) or args.num_exemplars == 0:
                         preds = test_model.classify(images, 
                                                     mean_image, 
                                                     args.img_size)
@@ -572,7 +582,7 @@ def test_run(device):
                     all_labels.append(labels.numpy())
 
             if (args.algo == "icarl" and not args.network) \
-                        or (args.algo == "e2e" and not args.ncm):
+                        or (args.algo == "e2e" and not args.ncm) or args.num_exemplars == 0:
                     
                 all_preds = np.concatenate(all_preds, axis=0)
             elif (args.algo == "icarl" and args.network) \
@@ -585,7 +595,7 @@ def test_run(device):
 
             for i in range(test_model.n_known):
                 if (args.algo == "icarl" and not args.network) \
-                        or (args.algo == "e2e" and not args.ncm):
+                        or (args.algo == "e2e" and not args.ncm) or args.num_exemplars == 0:
                     class_preds = all_preds[all_labels == i]
                     correct = np.sum(class_preds == i)
                     total = len(class_preds)
@@ -603,7 +613,7 @@ def test_run(device):
 
 
                 if (args.algo == "icarl" and not args.network) \
-                        or (args.algo == "e2e" and not args.ncm):
+                        or (args.algo == "e2e" and not args.ncm) or args.num_exemplars == 0:
                     acc_matr[i, s] = (100.0 * correct/total)
                 elif (args.algo == "icarl" and args.network) \
                         or (args.algo == "e2e" and args.ncm):
@@ -611,7 +621,7 @@ def test_run(device):
                     acc_matr_network[i, s] = (100.0 * correct_network/total)
 
             if (args.algo == "icarl" and not args.network) \
-                        or (args.algo == "e2e" and not args.ncm):
+                        or (args.algo == "e2e" and not args.ncm) or args.num_exemplars == 0:
                 test_acc = np.mean(acc_matr[:test_model.n_known, s])
                 print('%.2f ,' % test_acc, file=file)
                 print('[Test Process] =======> Test Accuracy after %d'
@@ -647,7 +657,7 @@ def test_run(device):
 
 
             if (args.algo == "icarl" and not args.network) \
-                        or (args.algo == "e2e" and not args.ncm):
+                        or (args.algo == "e2e" and not args.ncm) or args.num_exemplars == 0:
                 np.savez('%s-matr.npz' % os.path.splitext(args.outfile)[0], 
                      acc_matr=acc_matr, 
                      model_hyper_params=model.fetch_hyper_params(), 
