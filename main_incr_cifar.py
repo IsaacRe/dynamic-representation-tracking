@@ -192,8 +192,7 @@ if args.ft_fc:
     train_fc_device = 1
     test_device = 2
     if args.one_gpu:
-        test_device = 0
-        train_fc_device = 0
+        test_device = 1
 else:
     train_device = 0
     test_device = 1
@@ -620,11 +619,11 @@ def train_fc_run(device):
             train_loader = torch.utils.data.DataLoader(train_fc_set,
                                                        batch_size=args.batch_size_ft_fc, shuffle=True,
                                                        num_workers=0 if args.debug else args.num_workers,
-                                                       pin_memory=True)
+                                                       pin_memory=False)  #True)
             test_loader = torch.utils.data.DataLoader(test_set,
                                                       batch_size=args.batch_size_test, shuffle=False,
                                                       num_workers=0 if args.debug else args.num_workers,
-                                                      pin_memory=True)
+                                                      pin_memory=False)  #True)
 
             print('[Train-fc Process] Training final fc layer...')
             train_model.train_fc(args, train_loader)
@@ -717,7 +716,7 @@ def test_run(device):
             test_model.eval()
             test_loader = torch.utils.data.DataLoader(test_set, 
                 batch_size=args.batch_size_test, shuffle=False, \
-                num_workers=0 if args.debug else args.num_workers, pin_memory=True)
+                num_workers=0 if args.debug else args.num_workers, pin_memory=False)  #True)
 
             print("%d, " % test_model.n_known, end="", file=file)
 
