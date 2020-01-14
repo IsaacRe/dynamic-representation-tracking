@@ -458,7 +458,7 @@ def train_run(device):
         cond_var.acquire()
         # while loop to avoid spurious wakeups
         while test_counter.value + args.test_freq <= train_counter.value or \
-                train_fc_counter.value + args.test_freq <= train_counter.value:
+                (args.ft_fc and train_fc_counter.value + args.test_freq <= train_counter.value):
             print("[Train Process] Waiting on test process")
             print("[Train Process] train_counter : ", train_counter.value)
             print("[Train Process] test_counter : ", test_counter.value)
