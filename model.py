@@ -1,9 +1,9 @@
+import numpy as np
+import cv2
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.autograd import Variable
-import numpy as np
-import cv2
 from tqdm import tqdm
 import torchvision.models as models
 from utils.loader_utils import CustomRandomSampler
@@ -55,7 +55,7 @@ class IncrNet(nn.Module):
         # Whether to use fixed (loaded from pretrained model) exemplar set
         self.fixed_ex = args.fixed_ex
         # Whether to use a pretrained model from the same task
-        self.ptr_model = args.ptr_model
+        #self.ptr_model = args.ptr_model
         # Network architecture
         super(IncrNet, self).__init__()
         if len(self.file_path) == 0:
@@ -72,8 +72,8 @@ class IncrNet(nn.Module):
                 self.eset_le_maps_full = mdl.eset_le_maps
                 self.ex_class_id_map = {cl: idx for (cl, idx) in zip(np.load(classes_path)['classes_seen'], np.load(classes_path)['model_classes_seen'])}
                 # Train a new model with random weights
-                if not self.ptr_model:
-                    self.model = models.resnet34(pretrained=self.pretrained)
+                #if not self.ptr_model:
+                self.model = models.resnet34(pretrained=self.pretrained)
 
         if not self.pretrained:
             self.model.apply(kaiming_normal_init)
@@ -118,9 +118,6 @@ class IncrNet(nn.Module):
 
         self.sample = args.sample
 
-        # exemplar as negative signals
-        self.explr_neg_sig = args.explr_neg_sig
-
         # Cross Entropy Loss functions
         self.loss = args.loss
         if self.sample == 'wg':
@@ -142,7 +139,6 @@ class IncrNet(nn.Module):
         self.batch_pt = False
 
         # for saving exposure learning stats
-        self.record_iters = args.record_iters
         self.exposure_stats = []
 
     def from_resnet(self, model_file):
@@ -240,32 +236,14 @@ class IncrNet(nn.Module):
         self.exemplar_means = exemplar_means
         self.compute_means = False
 
-    def classify(self, x, mean_image, img_size):
+    def classify(self, x):
         '''
         Args:
             x: input images
         Returns:
             preds: Tensor of size (x.shape[0],)
         '''
-        batch_size = x.size(0)
-        if self.algo == 'lwf':
-            sigmoids = torch.sigmoid(self.forward(x))
-            _, preds = sigmoids.max(dim=1)
-            return preds
-
-        if self.num_explrs == 0:
-            return self.classify_network(x)
-
-
-        if self.algo == 'icarl' and not self.network:
-            return self.classify_ncm(x, mean_image, img_size)
-        if self.algo == 'e2e' and not self.ncm:
-            return self.classify_network(x)
-        if (self.algo == 'icarl' and self.network) \
-            or (self.algo == 'e2e' and self.ncm):
-            preds_ncm = self.classify_ncm(x, mean_image, img_size)
-            preds_network = self.classify_network(x)
-            return preds_ncm, preds_network
+        return self.classify_network(x)
 
     def classify_ncm(self, x, mean_image, img_size):
         # if we have no exemplars we cannot conduct ncm classification
