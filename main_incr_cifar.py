@@ -16,6 +16,7 @@ import pdb
 
 from dataset_incr_cifar import iCIFAR10, iCIFAR100
 from dataset_batch_cifar import CIFAR20
+from csv_writer import CSVWriter
 
 parser = argparse.ArgumentParser(description="Incremental learning")
 
@@ -659,8 +660,11 @@ def test_run(device):
     s = args.test_freq * (len(classes_seen)//args.test_freq)
 
     test_wait_time = 0
-    with open(args.outfile, "w") as file:
-        print("Model classes, Test Accuracy", file=file)
+    save_data = ['Iteration', 'Model_classes', 'Test_accuracy']
+    if args.ft_fc:
+        save_data += ['FTFC_accuracy']
+    writer = CSVWriter(args.outfile, *save_data)
+    with writer:
         while s < args.num_iters:
 
             # Wait till training is done
@@ -710,7 +714,7 @@ def test_run(device):
                                                          num_workers=0 if args.debug else args.num_workers,
                                                          pin_memory=True)
 
-            print("%d, %d, " % (s, test_model.n_known), end="", file=file)
+            writer.write(Model_classes=test_model.n_known, Iteration=s)
 
             print("[Test Process] Computing Accuracy matrix...")
             # TODO make sure computing and storing accuracies currectly during multi-class per exposure
@@ -735,7 +739,7 @@ def test_run(device):
                 acc_matr[i, s] = (100.0 * correct/total)
 
             test_acc = np.mean(acc_matr[:test_model.n_known, s])
-            print('%.2f' % test_acc, end=', ' if args.ft_fc else '\n', file=file)
+            writer.write(Test_accuracy='%.2f' % test_acc)
 
             print('[Test Process] =======> Test Accuracy after %d'
               ' learning exposures : ' %
@@ -785,7 +789,7 @@ def test_run(device):
             np.save('%s-fc-matr.npz' % os.path.splitext(args.outfile)[0],
                     acc_matr_fc)
 
-            print("%.2f" % test_acc, file=file)
+            writer.write(FTFC_accuracy='%.2f' % test_acc)
 
             # loop var increment
             s += args.test_freq
@@ -795,7 +799,7 @@ def test_run(device):
                  model_hyper_params=model.fetch_hyper_params(),
                  args=args, num_iters_done=s)
 
-            file.flush()
+            writer.iterate()
 
         print("[Test Process] Done, total time spent waiting : ",
               test_wait_time)
