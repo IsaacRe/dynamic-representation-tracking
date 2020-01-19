@@ -297,6 +297,12 @@ train_fc_set = CIFAR20(args, all_classes,
                        download=True,
                        transform=transform,
                        mean_image=mean_image)
+test_fc_set = CIFAR20(args, all_classes,
+                      root='./data',
+                      train=False,
+                      download=True,
+                      transform=None,
+                      mean_image=mean_image)
 
 print(len(train_set))
 print(num_classes)
@@ -457,8 +463,7 @@ def train_run(device):
         # Do not start training till test process catches up
         cond_var.acquire()
         # while loop to avoid spurious wakeups
-        while test_counter.value + args.test_freq <= train_counter.value or \
-                (args.ft_fc and train_fc_counter.value + args.test_freq <= train_counter.value):
+        while test_counter.value + args.test_freq <= train_counter.value:
             print("[Train Process] Waiting on test process")
             print("[Train Process] train_counter : ", train_counter.value)
             print("[Train Process] test_counter : ", test_counter.value)
@@ -661,8 +666,7 @@ def test_run(device):
             # Wait till training is done
             time_ptr = time.time()
             cond_var.acquire()
-            while train_counter.value < test_counter.value + args.test_freq or \
-                    (args.ft_fc and train_fc_counter.value <= test_counter.value):
+            while train_counter.value < test_counter.value + args.test_freq:
                 print("[Test Process] Waiting on train process")
                 print("[Test Process] train_counter : ", train_counter.value)
                 print("[Test Process] test_counter : ", test_counter.value)
@@ -693,11 +697,20 @@ def test_run(device):
             test_model.device = device
             test_model.cuda(device=device)
             test_model.eval()
+            train_loader = torch.utils.data.DataLoader(train_fc_set,
+                                                       batch_size=args.batch_size_ft_fc, shuffle=True,
+                                                       num_workers=0 if args.debug else args.num_workers,
+                                                       pin_memory=True)
             test_loader = torch.utils.data.DataLoader(test_set,
-                batch_size=args.batch_size_test, shuffle=False,
-                num_workers=0 if args.debug else args.num_workers, pin_memory=True)
+                                                      batch_size=args.batch_size_test, shuffle=False,
+                                                      num_workers=0 if args.debug else args.num_workers,
+                                                      pin_memory=True)
+            test_fc_loader = torch.utils.data.DataLoader(test_fc_set,
+                                                         batch_size=args.batch_size_test, shuffle=False,
+                                                         num_workers=0 if args.debug else args.num_workers,
+                                                         pin_memory=True)
 
-            print("%d, " % test_model.n_known, end="", file=file)
+            print("%d, %d, " % (s, test_model.n_known), end="", file=file)
 
             print("[Test Process] Computing Accuracy matrix...")
             # TODO make sure computing and storing accuracies currectly during multi-class per exposure
@@ -722,7 +735,8 @@ def test_run(device):
                 acc_matr[i, s] = (100.0 * correct/total)
 
             test_acc = np.mean(acc_matr[:test_model.n_known, s])
-            print('%.2f ,' % test_acc, file=file)
+            print('%.2f' % test_acc, end=', ' if args.ft_fc else '\n', file=file)
+
             print('[Test Process] =======> Test Accuracy after %d'
               ' learning exposures : ' %
               (s + args.test_freq), test_acc)
@@ -737,6 +751,41 @@ def test_run(device):
                 torch.save(test_model, "%s-saved_models/model_iter_%d.pth.tar"\
                                         %(os.path.join(args.save_all_dir, \
                                         os.path.splitext(args.outfile)[0]), s))
+
+            # FT-FC
+            # add nodes for unseen classes to output layer
+            test_model.increment_classes([c for c in all_classes if c not in test_model.classes_map])
+            test_model.cuda(device=device)
+            test_model.train()
+            test_model.train_fc(args, train_loader)
+            test_model.eval()
+
+            all_preds = []
+            all_labels = []
+            with torch.no_grad():
+                for indices, images, labels in test_fc_loader:
+                    images = Variable(images).cuda(device=device)
+                    preds = test_model.classify(images)
+                    # take only the network predictions
+                    if type(preds) is tuple:
+                        _, preds = preds
+                    all_preds += [preds.data.cpu().numpy()]
+                    all_labels += [labels.numpy()]
+            all_preds = np.concatenate(all_preds, axis=0)
+            all_labels = np.concatenate(all_labels, axis=0)
+            for i in range(total_classes):
+                preds = all_preds[all_labels == i]
+                accuracy = 100. * np.sum(preds == i) / np.sum(all_labels == i)
+                acc_matr_fc[i, s] = accuracy
+            test_acc = np.mean(acc_matr_fc[:, s])
+            print(test_acc)
+
+            print('[Train-fc Process] Saving Accuracy')
+
+            np.save('%s-fc-matr.npz' % os.path.splitext(args.outfile)[0],
+                    acc_matr_fc)
+
+            print("%.2f" % test_acc, file=file)
 
             # loop var increment
             s += args.test_freq
@@ -761,15 +810,9 @@ def cleanup(train_process, test_process):
 def main():
     train_process = mp.Process(target=train_run, args=(train_device,))
     test_process = mp.Process(target=test_run, args=(test_device,))
-    if args.ft_fc:
-        train_fc_process = mp.Process(target=train_fc_run, args=(train_fc_device,))
-        atexit.register(cleanup, train_process, test_process, train_fc_process)
-    else:
-        atexit.register(cleanup, train_process, test_process)
+    atexit.register(cleanup, train_process, test_process)
     train_process.start()
     test_process.start()
-    if args.ft_fc:
-        train_fc_process.start()
 
     train_process.join()
     print("Train Process Completed")
