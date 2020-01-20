@@ -47,9 +47,9 @@ parser.add_argument("--explr_model", type=str, required=False,
 # Hyperparameters
 parser.add_argument("--init_lr", default=0.002, type=float,
                     help="initial learning rate")
-parser.add_argument("--init_lr_ft", default=0.001, type=float,
+parser.add_argument("--init_lr_ft", default=0.005, type=float,
                     help="Init learning rate for balanced finetuning (for E2E)")
-parser.add_argument("--num_epoch", default=5, type=int,
+parser.add_argument("--num_epoch", default=1, type=int,
                     help="Number of epochs")
 parser.add_argument("--num_epoch_ft", default=10, type=int,
                     help="Number of epochs for balanced finetuning (for E2E)")
@@ -89,18 +89,12 @@ parser.add_argument("--fix_explr", action='store_true',
 # Model options
 parser.add_argument("--algo", default="icarl", type=str,
                     help="Algorithm to run. Options : icarl, e2e, lwf")
-parser.add_argument("--no_dist", dest="dist", action="store_false",
+parser.add_argument("--dist", dest="dist", action="store_true",
                     help="Option to switch off distillation loss")
-parser.add_argument("--pt", dest="pretrained", action="store_true",
+parser.add_argument("--no-pt", dest="pretrained", action="store_false",
                     help="Option to start from an ImageNet pretrained model")
-parser.add_argument('--ncm', dest='ncm', action='store_true',
-                    help='Use nearest class mean classification (for E2E)')
-parser.add_argument('--network', dest='network', action='store_true',
-                    help='Use network output to classify (for iCaRL)')
-parser.add_argument('--sample', default='none', type=str,
+parser.add_argument('--sample', default='wg', type=str,
                     help='Sampling mechanism to be performed')
-parser.add_argument('--random_explr', dest='random_explr', action='store_true',
-                    help='Option for random exemplar set')
 parser.add_argument('--loss', default='BCE', type=str,
                     help='Loss to be used in classification')
 parser.add_argument('--file_path', default='', type=str,

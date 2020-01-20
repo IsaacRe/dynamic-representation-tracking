@@ -46,8 +46,6 @@ class IncrNet(nn.Module):
         self.dist = args.dist
         self.algo = args.algo
         self.epsilon = 1e-16
-        self.ncm = args.ncm
-        self.network = args.network
         self.aug = args.aug
 
         # whether to load model from pretrained model
@@ -135,7 +133,7 @@ class IncrNet(nn.Module):
             for epoch in range(np.max([self.num_epoch, self.num_epoch_ft]))])
 
         # random exemplar option
-        self.random_exemplar = args.random_explr
+        self.random_exemplar = True
         self.batch_pt = False
 
         # for saving exposure learning stats
@@ -313,6 +311,8 @@ class IncrNet(nn.Module):
                     out = self.fc(x)
 
                     loss = self.ce_loss(out, y)
+                    loss = torch.mean(loss)
+
                     loss.backward(retain_graph=False)
                     optimizer.step()
 
