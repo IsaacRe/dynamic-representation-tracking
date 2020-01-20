@@ -465,6 +465,8 @@ def train_run(device):
     print("Args: ", args)
     train_wait_time = 0
 
+    lexp_time = []
+
     while s < args.num_iters:
         time_ptr = time.time()
         # Do not start training till test process catches up
@@ -477,6 +479,8 @@ def train_run(device):
             cond_var.wait()
         cond_var.release()
         train_wait_time += time.time() - time_ptr
+
+        start_time = time.time()
 
         # Keep a copy of previous model for distillation
         prev_model = copy.deepcopy(model)
@@ -546,6 +550,9 @@ def train_run(device):
 
         exemplar_data.append(list(model.eset_le_maps))
 
+        # Time learning exposures
+        lexp_time += [time.time() - start_time]
+        np.save('lexp-runtimes.npy', np.array(lexp_time))
 
         cond_var.acquire()
         train_counter.value += 1
@@ -586,6 +593,9 @@ def test_run(device):
     test_model = None
     s = args.test_freq * (len(classes_seen)//args.test_freq)
 
+    ftfc_time = []
+    test_time = []
+
     test_wait_time = 0
     save_data = ['Iteration', 'Model_classes', 'Test_accuracy']
     if args.ft_fc:
@@ -614,8 +624,8 @@ def test_run(device):
             cond_var.notify_all()
             cond_var.release()
 
+            start_time = time.time()
 
-    
             # test set only needs to be expanded
             # when a new exposure is seen
             for expanded_class in expanded_classes_copy:
@@ -680,6 +690,7 @@ def test_run(device):
               ' learning exposures : ' %
               (s + args.test_freq), test_acc)
 
+
             print("[Test Process] Saving model and other data")
             test_model.cpu()
             test_model.num_iters_done = s + args.test_freq
@@ -690,6 +701,10 @@ def test_run(device):
                 torch.save(test_model, "%s-saved_models/model_iter_%d.pth.tar"\
                                         %(os.path.join(args.save_all_dir, \
                                         os.path.splitext(args.outfile)[0]), s))
+
+            # Track test loop time before ft-fc
+            test_time += [time.time() - start_time]
+            np.save('test-runtimes.npy', np.array(test_time))
 
             # add nodes for unseen classes to output layer
             test_model.increment_classes([c for c in all_classes if c not in test_model.classes_map])
@@ -714,6 +729,7 @@ def test_run(device):
             ######################### FT-FC ##########################################################
 
             if args.ft_fc:
+                start_time = time.time()
                 test_model.train()
                 test_model.train_fc(args, train_loader)
                 test_model.eval()
@@ -749,6 +765,10 @@ def test_run(device):
                      acc_matr=acc_matr,
                      model_hyper_params=model.fetch_hyper_params(),
                      args=args, num_iters_done=s)
+
+                # Track ft-fc runtime (in eons lmao)
+                ftfc_time += [time.time() - start_time]
+                np.save('ftfc_runtimes.npy', np.array(ftfc_time))
 
             writer.iterate()
 
