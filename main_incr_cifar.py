@@ -107,8 +107,6 @@ parser.add_argument('--file_path', default='', type=str,
                     help='Path to csv file of pretrained model')
 parser.add_argument('--fixed_ex', dest='fixed_ex', action='store_true',
                     help='Option to use a fixed set of exemplars')
-#parser.add_argument('--ptr_model', dest='ptr_model', action='store_true',
-#                    help='Option to use a pretrained a model')
 
 # Training options
 parser.add_argument("--fix_exposure", action='store_true', help="Fix order of class exposures")
@@ -116,10 +114,8 @@ parser.add_argument("--diff_order", dest="d_order", action="store_true",
                     help="Use a random order of classes introduced")
 parser.add_argument("--subset", dest="subset", action="store_true",
                     help="Use a random subset of total_classes classes, instead of the first total_classes classes")
-"""
 parser.add_argument("--no_jitter", dest="jitter", action="store_false",
                     help="Option for no color jittering (for iCaRL)")
-"""
 parser.add_argument("--h_ch", default=0.02, type=float,
                     help="Color jittering : max hue change")
 parser.add_argument("--s_ch", default=0.05, type=float,
@@ -301,12 +297,13 @@ test_set = iCIFAR100(args, root="./data",
                              download=True,
                              transform=None,
                              mean_image=mean_image)
-train_fc_set = CIFAR20(args, all_classes,
-                       root='./data',
-                       train=True,
-                       download=True,
-                       transform=transform,
-                       mean_image=mean_image)
+if args.ft_fc:
+    train_fc_set = CIFAR20(args, all_classes,
+                           root='./data',
+                           train=True,
+                           download=True,
+                           transform=transform,
+                           mean_image=mean_image)
 test_all_set = CIFAR20(args, all_classes,
                       root='./data',
                       train=False,
@@ -583,85 +580,6 @@ def train_run(device):
     print("[Train Process] Done, total time spent waiting : ", train_wait_time)
 
 
-def train_fc_run(device):
-    train_model = None
-    s = args.test_freq * (len(classes_seen) // args.test_freq)
-
-    wait_time = 0
-    with open('%s-fc.csv' % args.outfile.split('.')[0], 'w+') as file:
-        print("Learning Exposure, Test Accuracy", file=file)
-
-        while s < args.num_iters:
-
-            # Wait till training done
-            time_ptr = time.time()
-            cond_var.acquire()
-            while train_counter.value < train_fc_counter.value + args.test_freq:
-                print("[Train-fc Process] Waiting on train process")
-                print("[Train-fc Process] train_counter : ", train_counter.value)
-                print("[Train-fc Process] train_fc_counter : ", train_fc_counter.value)
-                cond_var.wait()
-            cond_var.release()
-            wait_time += time.time() - time_ptr
-
-            cond_var.acquire()
-            train_model = dataQueue.get()
-            # requeue the model for test process
-            dataQueue.put(copy.deepcopy(train_model))
-            train_fc_counter.value += args.test_freq
-            cond_var.notify_all()
-            cond_var.release()
-
-            train_model.device = device
-            train_model.cuda(device=device)
-            train_model.train()
-            train_loader = torch.utils.data.DataLoader(train_fc_set,
-                                                       batch_size=args.batch_size_ft_fc, shuffle=True,
-                                                       num_workers=0 if args.debug else args.num_workers,
-                                                       pin_memory=True)
-            test_loader = torch.utils.data.DataLoader(test_set,
-                                                      batch_size=args.batch_size_test, shuffle=False,
-                                                      num_workers=0 if args.debug else args.num_workers,
-                                                      pin_memory=True)
-
-            print('[Train-fc Process] Training final fc layer...')
-            train_model.train_fc(args, train_loader)
-            train_model.eval()
-            all_preds = []
-            all_labels = []
-            with torch.no_grad():
-                for indices, images, labels in test_loader:
-                    images = Variable(images).cuda(device=device)
-                    preds = train_model.classify(images)
-                    # take only the network predictions
-                    if type(preds) is tuple:
-                        _, preds = preds
-                    all_preds += [preds.data.cpu().numpy()]
-                    all_labels += [labels.numpy()]
-            all_preds = np.concatenate(all_preds, axis=0)
-            all_labels = np.concatenate(all_labels, axis=0)
-            for i in range(total_classes):
-                preds = all_preds[all_labels == i]
-                accuracy = 100. * np.sum(preds == i) / np.sum(all_labels == i)
-                acc_matr_fc[i, s] = accuracy
-            test_acc = np.mean(acc_matr_fc[:, s])
-            print(test_acc)
-
-            s += args.test_freq
-
-            print('[Train-fc Process] Saving Accuracy')
-
-            np.save('%s-fc-matr.npz' % os.path.splitext(args.outfile)[0],
-                    acc_matr_fc)
-
-            print("%d, %.2f" % (s, test_acc), file=file)
-            file.flush()
-
-        # TODO change all_done for other run methods
-        print("[Train-fc Process] Done, total time spent waiting : ", wait_time)
-        all_done.set()
-
-
 def test_run(device):
     global test_set
     print("####### Test Process Running ########")
@@ -712,22 +630,24 @@ def test_run(device):
             test_model.device = device
             test_model.cuda(device=device)
             test_model.eval()
-            train_loader = torch.utils.data.DataLoader(train_fc_set,
-                                                       batch_size=args.batch_size_ft_fc, shuffle=True,
-                                                       num_workers=0 if args.debug else args.num_workers,
-                                                       pin_memory=True)
+            if args.ft_fc:
+                train_loader = torch.utils.data.DataLoader(train_fc_set,
+                                                           batch_size=args.batch_size_ft_fc, shuffle=True,
+                                                           num_workers=0 if args.debug else args.num_workers,
+                                                           pin_memory=True)
             test_loader = torch.utils.data.DataLoader(test_set,
                                                       batch_size=args.batch_size_test, shuffle=False,
                                                       num_workers=0 if args.debug else args.num_workers,
                                                       pin_memory=True)
             test_all_loader = torch.utils.data.DataLoader(test_all_set,
-                                                         batch_size=args.batch_size_test, shuffle=False,
-                                                         num_workers=0 if args.debug else args.num_workers,
-                                                         pin_memory=True)
-            correlation_loader = torch.utils.data.DataLoader(test_all_set,
-                                                          batch_size=args.batch_size_corr, shuffle=False,
+                                                          batch_size=args.batch_size_test, shuffle=False,
                                                           num_workers=0 if args.debug else args.num_workers,
                                                           pin_memory=True)
+            if args.feat_corr:
+                correlation_loader = torch.utils.data.DataLoader(test_all_set,
+                                                                 batch_size=args.batch_size_corr, shuffle=False,
+                                                                 num_workers=0 if args.debug else args.num_workers,
+                                                                 pin_memory=True)
 
             writer.write(Model_classes=test_model.n_known, Iteration=s)
 
@@ -793,46 +713,47 @@ def test_run(device):
 
             ######################### FT-FC ##########################################################
 
-            test_model.train()
-            test_model.train_fc(args, train_loader)
-            test_model.eval()
+            if args.ft_fc:
+                test_model.train()
+                test_model.train_fc(args, train_loader)
+                test_model.eval()
 
-            all_preds = []
-            all_labels = []
-            with torch.no_grad():
-                for indices, images, labels in test_all_loader:
-                    images = Variable(images).cuda(device=device)
-                    preds = test_model.classify(images)
-                    # take only the network predictions
-                    if type(preds) is tuple:
-                        _, preds = preds
-                    all_preds += [preds.data.cpu().numpy()]
-                    all_labels += [labels.numpy()]
-            all_preds = np.concatenate(all_preds, axis=0)
-            all_labels = np.concatenate(all_labels, axis=0)
-            for i in range(total_classes):
-                preds = all_preds[all_labels == i]
-                accuracy = 100. * np.sum(preds == i) / np.sum(all_labels == i)
-                acc_matr_fc[i, s] = accuracy
-            test_acc = np.mean(acc_matr_fc[:, s])
-            print(test_acc)
+                all_preds = []
+                all_labels = []
+                with torch.no_grad():
+                    for indices, images, labels in test_all_loader:
+                        images = Variable(images).cuda(device=device)
+                        preds = test_model.classify(images)
+                        # take only the network predictions
+                        if type(preds) is tuple:
+                            _, preds = preds
+                        all_preds += [preds.data.cpu().numpy()]
+                        all_labels += [labels.numpy()]
+                all_preds = np.concatenate(all_preds, axis=0)
+                all_labels = np.concatenate(all_labels, axis=0)
+                for i in range(total_classes):
+                    preds = all_preds[all_labels == i]
+                    accuracy = 100. * np.sum(preds == i) / np.sum(all_labels == i)
+                    acc_matr_fc[i, s] = accuracy
+                test_acc = np.mean(acc_matr_fc[:, s])
+                print(test_acc)
 
-            print('[Train-fc Process] Saving Accuracy')
+                print('[Train-fc Process] Saving Accuracy')
 
-            np.save('%s-fc-matr.npz' % os.path.splitext(args.outfile)[0],
-                    acc_matr_fc)
+                np.save('%s-fc-matr.npz' % os.path.splitext(args.outfile)[0],
+                        acc_matr_fc)
 
-            writer.write(FTFC_accuracy='%.2f' % test_acc)
+                writer.write(FTFC_accuracy='%.2f' % test_acc)
+
+                np.savez('%s-matr.npz' % os.path.splitext(args.outfile)[0],
+                     acc_matr=acc_matr,
+                     model_hyper_params=model.fetch_hyper_params(),
+                     args=args, num_iters_done=s)
+
+            writer.iterate()
 
             # loop var increment
             s += args.test_freq
-
-            np.savez('%s-matr.npz' % os.path.splitext(args.outfile)[0],
-                 acc_matr=acc_matr,
-                 model_hyper_params=model.fetch_hyper_params(),
-                 args=args, num_iters_done=s)
-
-            writer.iterate()
 
         print("[Test Process] Done, total time spent waiting : ",
               test_wait_time)
