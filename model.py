@@ -81,7 +81,7 @@ class IncrNet(nn.Module):
         self.model.fc = nn.Linear(feat_size, 1, bias=False)
         self.fc = self.model.fc
         self.feature_extractor = nn.Sequential(
-            *list(self.model.children())[:-1])       
+            *list(self.model.children())[:-1])
         # GPU device for the model
         self.device = device
 
@@ -140,6 +140,13 @@ class IncrNet(nn.Module):
 
         # for saving exposure learning stats
         self.exposure_stats = []
+
+    def children(self):
+        """
+        For compatibility with CorrelationTracker
+        :return: Generator<torch.module> returned from model.children()
+        """
+        return self.model.children()
 
     def from_resnet(self, model_file):
         self.batch_pt = True

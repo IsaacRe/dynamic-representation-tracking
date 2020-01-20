@@ -3,6 +3,7 @@ import cv2
 import torch
 from torch.autograd import Variable
 import torchvision.transforms as transforms
+import torchvision.models as models
 import argparse
 import time
 import numpy as np
@@ -17,6 +18,7 @@ import pdb
 from dataset_incr_cifar import iCIFAR10, iCIFAR100
 from dataset_batch_cifar import CIFAR20
 from csv_writer import CSVWriter
+from feature_matching import match
 
 parser = argparse.ArgumentParser(description="Incremental learning")
 
@@ -63,6 +65,8 @@ parser.add_argument("--batch_size_test", default=100, type=int,
                     help="Mini batch size for testing")
 parser.add_argument("--batch_size_ft_fc", type=int, default=100,
                     help="Mini batch size for final fc finetuning")
+parser.add_argument("--batch_size_corr", type=int, default=50,
+                    help="Mini batch size for computing correlations (keep < 64)")
 
 # Incremental options
 parser.add_argument("--lexp_len", default=100, type=int,
@@ -135,6 +139,11 @@ parser.add_argument('--ft_fc_epochs', type=int, default=10,
 parser.add_argument('--ft_fc_lr', type=float, default=0.002,
                     help='Lr for fc layer finetuning')
 
+# Matching Feature Correlation Analysis options
+parser.add_argument('--feat_corr', action='store_true', help='Conduct matching feature correlation analysis')
+parser.add_argument('--corr_feature_idx', type=int, default=7,
+                    help='Index of the layer in model.features over which correlations will be computed')
+
 # System options
 parser.add_argument("--test_freq", default=1, type=int,
                     help="Number of iterations of training after"
@@ -182,17 +191,10 @@ if args.one_gpu:
     mp.get_context("spawn")
 
 # GPU indices
-if args.ft_fc:
-    train_device = 0
-    train_fc_device = 1
-    test_device = 2
-    if args.one_gpu:
-        test_device = 1
-else:
-    train_device = 0
-    test_device = 1
-    if args.one_gpu:
-        test_device = 0
+train_device = 0
+test_device = 1
+if args.one_gpu:
+    test_device = 0
 
 if not os.path.exists(os.path.dirname(args.outfile)):
     if len(os.path.dirname(args.outfile)) != 0:
@@ -227,6 +229,13 @@ K = args.num_exemplars  # total number of exemplars
 model = IncrNet(args, device=train_device, cifar=True)
 if args.resume_outfile:
     model.from_resnet(args.resume_outfile)
+
+corr_model = None
+if args.feat_corr:
+    corr_model = models.resnet34(pretrained=True)
+    corr_model.eval()
+    for p in corr_model.parameters():
+        p.requires_grad = False
 
 assert total_classes % num_classes == 0
 
@@ -298,7 +307,7 @@ train_fc_set = CIFAR20(args, all_classes,
                        download=True,
                        transform=transform,
                        mean_image=mean_image)
-test_fc_set = CIFAR20(args, all_classes,
+test_all_set = CIFAR20(args, all_classes,
                       root='./data',
                       train=False,
                       download=True,
@@ -663,6 +672,8 @@ def test_run(device):
     save_data = ['Iteration', 'Model_classes', 'Test_accuracy']
     if args.ft_fc:
         save_data += ['FTFC_accuracy']
+    if args.feat_corr:
+        save_data += ['Feat_match_correlation']
     writer = CSVWriter(args.outfile, *save_data)
     with writer:
         while s < args.num_iters:
@@ -709,10 +720,14 @@ def test_run(device):
                                                       batch_size=args.batch_size_test, shuffle=False,
                                                       num_workers=0 if args.debug else args.num_workers,
                                                       pin_memory=True)
-            test_fc_loader = torch.utils.data.DataLoader(test_fc_set,
+            test_all_loader = torch.utils.data.DataLoader(test_all_set,
                                                          batch_size=args.batch_size_test, shuffle=False,
                                                          num_workers=0 if args.debug else args.num_workers,
                                                          pin_memory=True)
+            correlation_loader = torch.utils.data.DataLoader(test_all_set,
+                                                          batch_size=args.batch_size_corr, shuffle=False,
+                                                          num_workers=0 if args.debug else args.num_workers,
+                                                          pin_memory=True)
 
             writer.write(Model_classes=test_model.n_known, Iteration=s)
 
@@ -756,10 +771,28 @@ def test_run(device):
                                         %(os.path.join(args.save_all_dir, \
                                         os.path.splitext(args.outfile)[0]), s))
 
-            # FT-FC
             # add nodes for unseen classes to output layer
             test_model.increment_classes([c for c in all_classes if c not in test_model.classes_map])
             test_model.cuda(device=device)
+
+            ########################## Correlation Analysis #############################################
+            """
+            print('[Test Process] Computing Matching Feature Correlations....', end='')
+            assert corr_model, 'Correlation Model was never loaded'
+            corr_model.cuda(device=device)
+            assert next(corr_model.parameters()).is_cuda
+            matches, corr = match(device, correlation_loader, test_model, corr_model, args.corr_feature_idx,
+                                  replace=False)
+            # put save gpu space by putting model back when we're done
+            corr_model.cpu()
+
+            writer.write(Feat_match_correlation=corr)
+
+            print('done')
+            """
+
+            ######################### FT-FC ##########################################################
+
             test_model.train()
             test_model.train_fc(args, train_loader)
             test_model.eval()
@@ -767,7 +800,7 @@ def test_run(device):
             all_preds = []
             all_labels = []
             with torch.no_grad():
-                for indices, images, labels in test_fc_loader:
+                for indices, images, labels in test_all_loader:
                     images = Variable(images).cuda(device=device)
                     preds = test_model.classify(images)
                     # take only the network predictions
