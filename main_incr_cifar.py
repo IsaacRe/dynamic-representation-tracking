@@ -277,7 +277,7 @@ if args.num_iters > args.total_classes:
 
 # Group classes together, returns list of length len(perm_id) / num_classes
 all_classes = list(set(perm_id))
-perm_id = group_classes(perm_id)
+perm_id = group_classes(list(perm_id))
 
 train_set = iCIFAR100(args, root="./data",
                              train=True,
@@ -491,9 +491,9 @@ def train_run(device):
         for c in curr_class:
 
             if c not in model.classes_map:
-                model.increment_classes([c])
-                model.cuda(device=device)
                 curr_expanded += [c]
+        model.increment_classes(curr_expanded)
+        model.cuda(device=device)
 
         model_curr_class_idx = [model.classes_map[c] for c in curr_class]
         model_classes_seen.append(model_curr_class_idx)
@@ -715,7 +715,7 @@ def test_run(device):
             # put save gpu space by putting model back when we're done
             corr_model.cpu()
 
-            writer.write(Feat_match_correlation=corr)
+            writer.write(Feat_match_correlation=str(corr.mean()))
 
             print('done')
 
