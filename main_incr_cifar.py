@@ -65,8 +65,6 @@ parser.add_argument("--batch_size_test", default=100, type=int,
                     help="Mini batch size for testing")
 parser.add_argument("--batch_size_ft_fc", type=int, default=100,
                     help="Mini batch size for final fc finetuning")
-parser.add_argument("--batch_size_corr", type=int, default=50,
-                    help="Mini batch size for computing correlations (keep < 64)")
 
 # Incremental options
 parser.add_argument("--lexp_len", default=100, type=int,
@@ -133,6 +131,8 @@ parser.add_argument('--ft_fc_lr', type=float, default=0.002,
 parser.add_argument('--feat_corr', action='store_true', help='Conduct matching feature correlation analysis')
 parser.add_argument('--corr_feature_idx', type=int, default=7,
                     help='Index of the layer in model.features over which correlations will be computed')
+parser.add_argument("--batch_size_corr", type=int, default=50,
+                    help="Mini batch size for computing correlations (keep < 64)")
 
 # System options
 parser.add_argument("--test_freq", default=1, type=int,
@@ -705,7 +705,7 @@ def test_run(device):
             test_model.cuda(device=device)
 
             ########################## Correlation Analysis #############################################
-            """
+            
             print('[Test Process] Computing Matching Feature Correlations....', end='')
             assert corr_model, 'Correlation Model was never loaded'
             corr_model.cuda(device=device)
@@ -718,7 +718,6 @@ def test_run(device):
             writer.write(Feat_match_correlation=corr)
 
             print('done')
-            """
 
             ######################### FT-FC ##########################################################
 

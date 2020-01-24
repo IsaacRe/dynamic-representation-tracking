@@ -239,10 +239,11 @@ class FeatureMatcher:
         # TODO implement bipartite matching/semi-matching
         matches = np.ndarray(corr_matr.shape[0])
         correlations = np.ndarray(corr_matr.shape[0])
+        new_corr = corr_matr.copy()
         for i in range(corr_matr.shape[0]):
-            j = np.argmax(corr_matr[i])
+            j = np.argmax(new_corr[i])
             if not replace:
-                corr_matr[:, j] = -np.ones((corr_matr.shape[1]))
+                new_corr[:, j] = -np.ones((new_corr.shape[1]))
             matches[i] = j
             correlations[i] = corr_matr[i, j]
         return matches, correlations
