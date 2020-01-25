@@ -448,6 +448,12 @@ if args.resume or args.explr_start:
             print("Expanding class for resuming : %d, %d" %(mdl_cl, gt_cl))
             test_set.expand([mdl_cl], [gt_cl])
 
+save_data = ['Iteration', 'Model_classes', 'Test_accuracy', 'Train_loss', 'Exposure_time', 'Test_time']
+if args.ft_fc:
+    save_data += ['FTFC_accuracy', 'FTFC_time']
+if args.feat_corr:
+    save_data += ['Feat_match_correlation', 'Correlation_time']
+writer = CSVWriter(args.outfile, *save_data)
 
 def train_run(device):
     global train_set
@@ -458,8 +464,6 @@ def train_run(device):
     print("####### Train Process Running ########")
     print("Args: ", args)
     train_wait_time = 0
-
-    lexp_time = []
 
     while s < args.num_iters:
         time_ptr = time.time()
@@ -506,10 +510,11 @@ def train_run(device):
 
         model.train()
 
-        model.update_representation_icarl(train_set, \
-                                          prev_model, \
-                                          model_curr_class_idx, \
-                                          args.num_workers)
+        mean_loss = model.update_representation_icarl(train_set,
+                                                      prev_model,
+                                                      model_curr_class_idx,
+                                                      args.num_workers)
+
         model.eval()
         del prev_model
         m = args.num_exemplars if args.fix_explr else int(K / model.n_classes)
@@ -545,8 +550,7 @@ def train_run(device):
         exemplar_data.append(list(model.eset_le_maps))
 
         # Time learning exposures
-        lexp_time += [time.time() - start_time]
-        np.save('lexp-runtimes.npy', np.array(lexp_time))
+        lexp_time = time.time() - start_time
 
         cond_var.acquire()
         train_counter.value += 1
@@ -558,7 +562,8 @@ def train_run(device):
         if train_counter.value == test_counter.value + args.test_freq:
             temp_model = copy.deepcopy(model)
             temp_model.cpu()
-            dataQueue.put(temp_model)
+            write_data = {'Train_loss': mean_loss, 'Exposure_time': lexp_time}
+            dataQueue.put((temp_model, write_data))
         cond_var.notify_all()
         cond_var.release()
 
@@ -587,16 +592,7 @@ def test_run(device):
     test_model = None
     s = args.test_freq * (len(classes_seen)//args.test_freq)
 
-    ftfc_time = []
-    test_time = []
-
     test_wait_time = 0
-    save_data = ['Iteration', 'Model_classes', 'Test_accuracy']
-    if args.ft_fc:
-        save_data += ['FTFC_accuracy']
-    if args.feat_corr:
-        save_data += ['Feat_match_correlation']
-    writer = CSVWriter(args.outfile, *save_data)
     with writer:
         while s < args.num_iters:
 
@@ -612,11 +608,14 @@ def test_run(device):
             test_wait_time += time.time() - time_ptr
 
             cond_var.acquire()
-            test_model = dataQueue.get()
+            test_model, write_data = dataQueue.get()
             expanded_classes_copy = copy.deepcopy(expanded_classes)
             test_counter.value += args.test_freq
             cond_var.notify_all()
             cond_var.release()
+
+            # write data from train process
+            writer.write(**write_data)
 
             start_time = time.time()
 
@@ -655,6 +654,8 @@ def test_run(device):
 
             writer.write(Model_classes=test_model.n_known, Iteration=s)
 
+            ############################# Test Accuracy (Seen Classes) ######################################
+
             print("[Test Process] Computing Accuracy matrix...")
             # TODO make sure computing and storing accuracies currectly during multi-class per exposure
             all_labels = []
@@ -678,7 +679,10 @@ def test_run(device):
                 acc_matr[i, s] = (100.0 * correct/total)
 
             test_acc = np.mean(acc_matr[:test_model.n_known, s])
-            writer.write(Test_accuracy='%.2f' % test_acc)
+
+            # Track test loop time before ft-fc
+            test_time = time.time() - start_time
+            writer.write(Test_accuracy=test_acc, Test_time=test_time)
 
             print('[Test Process] =======> Test Accuracy after %d'
               ' learning exposures : ' %
@@ -696,37 +700,41 @@ def test_run(device):
                                         %(os.path.join(args.save_all_dir, \
                                         os.path.splitext(args.outfile)[0]), s))
 
-            # Track test loop time before ft-fc
-            test_time += [time.time() - start_time]
-            np.save('test-runtimes.npy', np.array(test_time))
-
             # add nodes for unseen classes to output layer
             test_model.increment_classes([c for c in all_classes if c not in test_model.classes_map])
             test_model.cuda(device=device)
 
             ########################## Correlation Analysis #############################################
-            
-            print('[Test Process] Computing Matching Feature Correlations....', end='')
-            assert corr_model, 'Correlation Model was never loaded'
-            corr_model.cuda(device=device)
-            assert next(corr_model.parameters()).is_cuda
-            matches, corr = match(device, correlation_loader, test_model, corr_model, args.corr_feature_idx,
-                                  replace=False)
-            # put save gpu space by putting model back when we're done
-            corr_model.cpu()
 
-            writer.write(Feat_match_correlation=str(corr.mean()))
+            if args.feat_corr:
+                print('[Test Process] Computing Matching Feature Correlations....', end='')
+                start_time = time.time()
 
-            print('done')
+                assert corr_model, 'Correlation Model was never loaded'
+
+                corr_model.cuda(device=device)
+                assert next(corr_model.parameters()).is_cuda
+                matches, corr = match(device, correlation_loader, test_model, corr_model, args.corr_feature_idx,
+                                      replace=False)
+                # put save gpu space by putting model back when we're done
+                corr_model.cpu()
+
+                corr_time = time.time() - start_time
+
+                writer.write(Feat_match_correlation=corr.mean(), Correlation_time=corr_time)
+
+                print('done')
 
             ######################### FT-FC ##########################################################
 
             if args.ft_fc:
+                print('[Test Process] Finetuning FC layer')
                 start_time = time.time()
                 test_model.train()
                 test_model.train_fc(args, train_loader)
                 test_model.eval()
 
+                print('[Test Process] Testing FT-FC')
                 all_preds = []
                 all_labels = []
                 with torch.no_grad():
@@ -747,23 +755,19 @@ def test_run(device):
                 test_acc = np.mean(acc_matr_fc[:, s])
                 print(test_acc)
 
-                print('[Train-fc Process] Saving Accuracy')
+                print('[Test Process] Saving FT-FC Accuracy')
 
                 np.save('%s-fc-matr.npz' % os.path.splitext(args.outfile)[0],
                         acc_matr_fc)
 
-                writer.write(FTFC_accuracy='%.2f' % test_acc)
-
                 np.savez('%s-matr.npz' % os.path.splitext(args.outfile)[0],
-                     acc_matr=acc_matr,
-                     model_hyper_params=model.fetch_hyper_params(),
-                     args=args, num_iters_done=s)
+                         acc_matr=acc_matr,
+                         model_hyper_params=model.fetch_hyper_params(),
+                         args=args, num_iters_done=s)
 
                 # Track ft-fc runtime (in eons lmao)
-                ftfc_time += [time.time() - start_time]
-                np.save('ftfc_runtimes.npy', np.array(ftfc_time))
-
-            writer.iterate()
+                ftfc_time = time.time() - start_time
+                writer.write(FTFC_accuracy=test_acc, FTFC_time=ftfc_time)
 
             # loop var increment
             s += args.test_freq

@@ -574,6 +574,9 @@ class IncrNet(nn.Module):
                               momentum=self.momentum,
                               weight_decay=self.weight_decay)
 
+        mean_loss = 0
+        total = 0
+
         # label matrix
         q = Variable(torch.zeros(self.batch_size, self.n_classes)
                      ).cuda(device=self.device)
@@ -630,6 +633,10 @@ class IncrNet(nn.Module):
                     weights = weights.float().cuda(device=self.device)
                     loss = torch.mean(loss * weights)
 
+                    if len(labels) == loader.batch_sampler.batch_size:
+                        mean_loss += loss.cpu().item()
+                        total += 1
+
                 loss.backward()
                 # if self.n_classes > 1:
                 #     print('GRADS: ')
@@ -642,6 +649,9 @@ class IncrNet(nn.Module):
                               i % num_batches_per_epoch+1, 
                               num_batches_per_epoch, loss.data))
                 pbar.update(1)
+
+        mean_loss /= total
+        return mean_loss
 
 
     def update_representation_e2e(self, dataset, prev_model, 
