@@ -245,39 +245,35 @@ elif args.d_order:
 else:
     perm_id = np.arange(total_classes)
 
-print ("perm_id:", perm_id)
+all_classes = list(perm_id)
+perm_id = group_classes(list(perm_id))
 
-if args.num_iters > args.total_classes:
-    if not args.num_iters % args.total_classes == 0:
-        raise Exception("Currently no support for num_iters%total_classes != 0")
+print("perm_id:", perm_id)
 
-    # Multiply num_repetitions by number of classes per epoch to number of total learning exposures remains same
+if args.num_iters > len(perm_id):
+    if args.num_iters % len(perm_id) != 0:
+        raise Exception('Must have num_iters % total_classes / num_classes = 0')
+
+    # Multiply num_repetitions by number of classes per epoch so number of total learning exposures remains same
     num_repetitions = args.num_iters // total_classes * num_classes
     perm_file = "permutation_files/permutation_%d_%d.npy" \
-                                    % (total_classes, num_repetitions)
+                % (total_classes // num_classes, num_repetitions)
 
-    if not os.path.exists(perm_file) and not args.fix_exposure:
+    if not os.path.exists(perm_file):
         os.makedirs("permutation_files", exist_ok=True)
         # Create random permutation file and save
-        perm_arr = np.array(num_repetitions 
-                            * list(np.arange(total_classes)))
+        perm_arr = np.array(num_repetitions
+                            * list(np.arange(len(perm_id))))
         np.random.shuffle(perm_arr)
         np.save(perm_file, perm_arr)
     else:
         print("Loading permutation file: %s" % perm_file)
 
-    if not args.fix_exposure:
-        perm_id_all = np.load(perm_file)
-    else:
-        perm_id_all = np.array(num_repetitions * list(np.arange(total_classes)))
+    perm_id_all = list(np.load(perm_file))
     print("PERM ID ALL: ===>", perm_id_all)
     for i in range(len(perm_id_all)):
         perm_id_all[i] = perm_id[perm_id_all[i]]
     perm_id = perm_id_all
-
-# Group classes together, returns list of length len(perm_id) / num_classes
-all_classes = list(set(perm_id))
-perm_id = group_classes(list(perm_id))
 
 train_set = iCIFAR100(args, root="./data",
                              train=True,
