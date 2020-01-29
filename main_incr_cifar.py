@@ -19,6 +19,7 @@ from dataset_incr_cifar import iCIFAR10, iCIFAR100
 from dataset_batch_cifar import CIFAR20
 from csv_writer import CSVWriter
 from feature_matching import match
+from feature_vis import FeatureVis
 
 parser = argparse.ArgumentParser(description="Incremental learning")
 
@@ -134,6 +135,12 @@ parser.add_argument('--corr_feature_idx', type=int, default=7,
 parser.add_argument("--batch_size_corr", type=int, default=50,
                     help="Mini batch size for computing correlations (keep < 64)")
 
+# Feature Visualization Options
+parser.add_argument('--feat_vis', action='store_true', help='Carry out visualization of feature map encodings')
+parser.add_argument('--feat_vis_layer_name', type=str, default='layer4.2.conv2',
+                    help='Index of the layer at which to conduct visualization')
+parser.add_argument('--feat_vis_filter_idx', type=int, default=0, help='Index of the filter to visualize')
+
 # System options
 parser.add_argument("--test_freq", default=1, type=int,
                     help="Number of iterations of training after"
@@ -219,6 +226,10 @@ K = args.num_exemplars  # total number of exemplars
 model = IncrNet(args, device=train_device, cifar=True)
 if args.resume_outfile:
     model.from_resnet(args.resume_outfile)
+
+# set up feature running feature visualization
+if args.feat_vis:
+    feat_tracker = FeatureVis(model.model, args.feat_vis_layer_name, args.feat_vis_filter_idx)
 
 corr_model = None
 if args.feat_corr:
