@@ -20,7 +20,7 @@ class CSVWriter:
         self._write_header()
 
     def _write_header(self):
-        line = ', '.join(self.dtypes)
+        line = ','.join(self.dtypes)
         self.stream.write(line + '\n')
         self.stream.flush()
 
