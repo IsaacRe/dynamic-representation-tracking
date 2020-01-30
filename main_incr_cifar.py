@@ -229,7 +229,7 @@ if args.resume_outfile:
 
 # set up feature running feature visualization
 if args.feat_vis:
-    feat_tracker = FeatureVis(model.model, args.feat_vis_layer_name, args.feat_vis_filter_idx)
+    feat_tracker = FeatureVis(model.model, args.feat_vis_layer_name, args.feat_vis_filter_idx, args.outfile)
 
 corr_model = None
 if args.feat_corr:
@@ -586,6 +586,8 @@ def train_run(device):
                  exemplar_data=np.array(exemplar_data))
         # loop var increment
         s += 1
+        if args.feat_vis:
+            feat_tracker.advance_epoch()
 
     time_ptr = time.time()
     all_done.wait()

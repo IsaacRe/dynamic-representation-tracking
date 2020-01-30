@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from torch.optim import SGD
 import matplotlib.pyplot as plt
+from pathlib import Path
 
 
 class FeatureVis:
@@ -9,7 +10,7 @@ class FeatureVis:
     Class to handle visualization of maximally activating receptive field inputs for a particular conv filter
     """
 
-    def __init__(self, model, layer_name, idx):
+    def __init__(self, model, layer_name, idx, save_file):
         self.model = model
         #self.model.apply(self.disable_batchnorm)
         self.f_hook_first_ = None
@@ -22,7 +23,19 @@ class FeatureVis:
         self.max_rf_input = None
         self.max_full_img = None
         self.current_input = None
+        self.save_dir = save_file.split('.')[0] + '-rf-imgs'
+        Path(self.save_dir).mkdir(exist_ok=True)
+        self.epoch = 0
+        self.max_activations = []
         self.setup_hooks()
+
+    def advance_epoch(self):
+        self.max_activations += [self.max_activation]
+        self.max_activation = 0
+        np.save(self.save_dir + '/epoch-%d-rf.npy' % self.epoch, self.max_rf_input)
+        np.save(self.save_dir + '/epoch-%d-img.npy' % self.epoch, self.max_full_img)
+        self.max_rf_input = self.max_full_img = None
+        self.epoch += 1
 
     def get_img(self, vect):
         img_min = vect.min().item()
@@ -98,6 +111,12 @@ class FeatureVis:
         output[0, self.idx, 0, 0].backward(retain_graph=True)
         grad = self.current_input.grad[batch_idx, self.idx]
         print(np.where(grad.cpu() != 0))
+        """
+
+        """
+        # Used to check which filter has the max activation for the current batch features
+        # Effectively useless since high activation early on does not correlate with useful feature encodings
+        out, idx = output.max(dim=0)[0].max(dim=1)[0].max(dim=1)[0].max(dim=0)
         """
 
         out = output[:, self.idx]
