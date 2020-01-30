@@ -76,8 +76,6 @@ class CSVWriter:
         return False
 
     def close(self):
-        if self.data_buffer:
-            self.iterate()
         self.stream.close()
 
     def __enter__(self):
