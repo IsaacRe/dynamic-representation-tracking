@@ -6,7 +6,7 @@ import cv2
 
 
 class CIFAR20(CIFAR100):
-    def __init__(self, args, classes,
+    def __init__(self, classes,
                  root='./data',
                  train=True,
                  mean_image=None,
@@ -28,7 +28,7 @@ class CIFAR20(CIFAR100):
                 train_data += [self.train_data[idx]]
                 train_labels += list(np_labels[idx])
             self.train_data = np.concatenate(train_data)
-            self.img_size = args.img_size
+            self.img_size = 224
 
             self.train_labels = train_labels
 
@@ -48,7 +48,7 @@ class CIFAR20(CIFAR100):
                 test_data += [self.test_data[idx]]
                 test_labels += list(np_labels[idx])
             self.test_data = np.concatenate(test_data)
-            self.img_size = args.img_size
+            self.img_size = 224
 
             self.test_labels = test_labels
 

@@ -1,18 +1,203 @@
 import numpy as np
+import matplotlib.pyplot as plt
 import torch
 from torch.optim import SGD
 import matplotlib.pyplot as plt
 from pathlib import Path
+import copy
+from tqdm.auto import tqdm
 
 
-class FeatureVis:
+class EarlyStopping(Exception):
+    pass
+
+
+class PatchAggregator:
     """
     Class to handle visualization of maximally activating receptive field inputs for a particular conv filter
     """
 
+    def __init__(self, model, layer_name, loader, threshold=4.0):
+        self.loader = loader
+        self.model = model
+        self.model.eval()
+        self.rf_model = copy.deepcopy(model)
+        self.rf_model.apply(self.disable_batchnorm)
+        self.feature_m_name = None
+        self.feature_module = None
+        self.feature_module_rf = None
+        self.layer = layer_name
+        self.max_rf_input = []
+        # TODO vvv
+        self.max_full_img = []
+        self.save_dir = 'rf-imgs/%s' % layer_name
+        Path(self.save_dir).mkdir(exist_ok=True, parents=True)
+        self.epoch = 0
+        self.threshold = threshold
+        self.max_activations = [[] for i in range(loader.batch_size)]
+        self.f_hook = None
+        self.f_hook_rf = None
+        self.current_input = None
+        self.img_index = 0
+        self.saved_inputs = None
+        self.setup_hooks()
+
+    def aggregate_patches(self):
+        """
+        Save patches obtained from receptive fields of maximally activated features
+        :param loader:
+        :return:
+        """
+        for indices, images, labels in tqdm(self.loader):
+            input = images.cuda()
+            # save self.max_activations
+            try:
+                with torch.no_grad():
+                    self.model(input)
+            except EarlyStopping:
+                pass
+            # save self.max_rf_input and self.max_rf_full_img
+            input.requires_grad = True
+            self.current_input = input
+            try:
+                self.rf_model(input)
+            except EarlyStopping:
+                pass
+
+            self.save()
+
+    def save(self):
+        """
+        Concatenate and save the max rf inputs accumulated to a npy file
+        :return: None
+        """
+        def shape2slice(shape):
+            return slice(0, shape[0]), slice(0, shape[1]), slice(None)
+
+        max_shape = max([inp.shape[0] for inp in self.max_rf_input]), \
+                    max([inp.shape[1] for inp in self.max_rf_input]), 3
+        saved_inputs = np.zeros((len(self.max_rf_input), *max_shape))
+        for i, inp in enumerate(self.max_rf_input):
+            saved_inputs[(i, *shape2slice(inp.shape))] = inp
+        if self.saved_inputs is None:
+            self.saved_inputs = saved_inputs
+        else:
+            self.saved_inputs = np.concatenate([self.saved_inputs, saved_inputs], axis=0)
+        np.save('%s.npy' % self.save_dir, self.saved_inputs)
+        self.img_index += len(self.max_rf_input)
+        self.max_rf_input = []
+        self.max_full_img = []
+
+    def get_img(self, vect):
+        """
+        Normalizes and transposes the image array to be a valid plottable image
+        :param vect: [F x H x W] image array
+        :return: transformed image
+        """
+        img_min = vect.min().item()
+        img_max = vect.max().item()
+        img = vect.data.cpu().transpose(0, 2).numpy()
+        img -= img_min
+        img /= (img_max - img_min)
+
+        return img
+
+    def disable_batchnorm(self, module):
+        """
+        If the passed module is a batchnorm instance, disable it.
+        Used only to assist calculation of layers' receptive fields
+        :param module: module
+        :return:
+        """
+        if isinstance(module, torch.nn.BatchNorm2d):
+            module.forward_ = module.forward
+            module.forward = lambda x: x
+
+    def compute_rf(self, activation, rf_input, samples):
+        """
+        Get receptive field of the feature of the specified sample at the specified spatial index.
+        :param activation: [>= batch]-sized tensor containing max activations for each sample in the batch
+        :param rf_input: the input to the network with require_grad=True
+        :return: The section of the original input responsible for computing the passed activation
+        """
+        activation.sum().backward(retain_graph=True)
+        rf_masks = [np.where(rf_input.grad[s].cpu() != 0) for s in samples]
+        rf_input.grad.zero_()
+        self.rf_model.zero_grad()
+
+        return rf_masks
+
+    def setup_hooks(self):
+        assert hasattr(self.model, 'named_modules'), "Model does not have modules() method"
+        for i, ((name, m), (name_, m_)) in enumerate(zip(self.model.named_modules(), self.rf_model.named_modules())):
+            assert name == name_
+            # setup tracking for initial module
+            if name == self.layer:
+                self.f_hook = m.register_forward_hook(self.f_hook_feature)
+                self.feature_m_name = name
+                self.feature_module = m
+                self.f_hook_rf = m_.register_forward_hook(self.f_hook_findrf)
+                self.feature_module_rf = m_
+
+    def f_hook_findrf(self, module, input, output):
+        """
+        Forward hook to save rf data corresponding to previously computed maximal activations
+        :param module: the conv2d module
+        :param input: the conv2d input
+        :param output: the conv2d output
+        :return:
+        """
+        # iteratively find batches of receptive fields of maximal activations across batch dim
+        while any([len(idxs) > 0 for idxs in self.max_activations]):
+            # max_activations should be a list(list(idx)) for activation[idx] = a particular max activation
+
+            # get list of samples for which max activations were found
+            samples = [s for idxs, s in zip(self.max_activations, range(self.loader.batch_size)) if len(idxs) > 0]
+            next_batch = zip(*[idxs.pop(0) for idxs in self.max_activations if len(idxs) > 0])
+            next_batch = tuple([np.array(idxs) for idxs in next_batch])
+            next_batch = output[next_batch]
+
+            # compute sample-wise rf for corresponding max activations
+            rf_masks = self.compute_rf(next_batch, self.current_input, samples)
+
+            # get masks of individual samples
+            for rf_mask, s in zip(rf_masks, samples):
+                h_slice = slice(rf_mask[1].min(), rf_mask[1].max() + 1)
+                w_slice = slice(rf_mask[2].min(), rf_mask[2].max() + 1)
+                img_arr = self.current_input[s, :, h_slice, w_slice]
+
+                self.max_rf_input += [self.get_img(img_arr)]
+
+            # TODO max_rf_full_img
+        self.max_activations = [[] for _ in self.max_activations]
+
+    def f_hook_feature(self, module, input, output):
+        """
+        Forward hook to compute maximal activations
+        :param module: the conv2d module
+        :param input: conv2d input
+        :param output: conv2d output
+        :return:
+        """
+        # determine maximal activations in each sample
+        # TODO try simply gathering highest activations for each sample
+        output = output.cpu()
+        for i, out in enumerate(output):
+            max_acts = np.where(out == out.max())
+            max_acts = np.array([i] * len(max_acts[0])), *max_acts
+            self.max_activations[i] += list(zip(*max_acts))
+
+
+class FeatureVis:
+    """
+    Class to handle visualization of maximally activating receptive field inputs for a particular conv filter during
+    continual class learning
+    """
+
     def __init__(self, model, layer_name, idx, save_file):
         self.model = model
-        #self.model.apply(self.disable_batchnorm)
+        #self.rf_model = copy.deepcopy(model)
+        #self.rf_model.apply(self.disable_batchnorm)
         self.f_hook_first_ = None
         self.f_hook_feature_ = None
         self.feature_m_name = None
@@ -56,15 +241,6 @@ class FeatureVis:
         if isinstance(module, torch.nn.BatchNorm2d):
             module.forward_ = module.forward
             module.forward = lambda x: x
-
-    def enable_batchnorm(self, module):
-        """
-        Enable passed batchnorm layer. Used only to assist calculation of layers' receptive fields
-        :param module: module
-        :return:
-        """
-        if isinstance(module, torch.nn.BatchNorm2d):
-            module.train()
 
     def compute_rf(self, idx):
         """
