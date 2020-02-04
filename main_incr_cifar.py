@@ -19,7 +19,7 @@ from dataset_incr_cifar import iCIFAR10, iCIFAR100
 from dataset_batch_cifar import CIFAR20
 from csv_writer import CSVWriter
 from feature_matching import match
-from feature_vis import FeatureVis
+from feature_vis import FeatureVis, PatchTracker
 
 parser = argparse.ArgumentParser(description="Incremental learning")
 
@@ -136,8 +136,10 @@ parser.add_argument("--batch_size_corr", type=int, default=50,
                     help="Mini batch size for computing correlations (keep < 64)")
 
 # Feature Visualization Options
+parser.add_argument('--probe', action='store_true',
+                    help='Carry out probing of feature map with previously obtained patches')
 parser.add_argument('--feat_vis', action='store_true', help='Carry out visualization of feature map encodings')
-parser.add_argument('--feat_vis_layer_name', type=str, default='layer4.2.conv2',
+parser.add_argument('--feat_vis_layer_name', type=str, default='layer2.0.conv1',
                     help='Index of the layer at which to conduct visualization')
 parser.add_argument('--feat_vis_filter_idx', type=int, default=0, help='Index of the filter to visualize')
 
@@ -227,9 +229,11 @@ model = IncrNet(args, device=train_device, cifar=True)
 if args.resume_outfile:
     model.from_resnet(args.resume_outfile)
 
-# set up feature running feature visualization
+# set up running feature visualization
 if args.feat_vis:
     feat_tracker = FeatureVis(model.model, args.feat_vis_layer_name, args.feat_vis_filter_idx, args.outfile)
+if args.probe:
+    probe = PatchTracker(model.model, args.feat_vis_layer_name)
 
 corr_model = None
 if args.feat_corr:
@@ -299,13 +303,13 @@ test_set = iCIFAR100(args, root="./data",
                              transform=None,
                              mean_image=mean_image)
 if args.ft_fc:
-    train_fc_set = CIFAR20(args, all_classes,
+    train_fc_set = CIFAR20(all_classes,
                            root='./data',
                            train=True,
                            download=True,
                            transform=transform,
                            mean_image=mean_image)
-test_all_set = CIFAR20(args, all_classes,
+test_all_set = CIFAR20(all_classes,
                       root='./data',
                       train=False,
                       download=True,
@@ -472,6 +476,8 @@ def train_run(device):
     print("Args: ", args)
     train_wait_time = 0
 
+    running_activations = None
+
     while s < args.num_iters:
         time_ptr = time.time()
         # Do not start training till test process catches up
@@ -588,6 +594,15 @@ def train_run(device):
         s += 1
         if args.feat_vis:
             feat_tracker.advance_epoch()
+
+        if args.probe:
+            max_activations = probe.probe()
+            if running_activations is None:
+                running_activations = max_activations.reshape(1, -1)
+                np.save('%s-activations.npy' % args.outfile.split('.')[0], running_activations)
+            else:
+                running_activations = np.concatenate([running_activations, max_activations.reshape(1, -1)], axis=0)
+                np.save('%s-activations.npy' % args.outfile.split('.')[0], running_activations)
 
     time_ptr = time.time()
     all_done.wait()

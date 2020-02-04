@@ -4,6 +4,7 @@ import torch
 from torch.optim import SGD
 import matplotlib.pyplot as plt
 from pathlib import Path
+import os.path as path
 import copy
 from tqdm.auto import tqdm
 
@@ -128,7 +129,7 @@ class PatchAggregator:
         return rf_masks
 
     def setup_hooks(self):
-        assert hasattr(self.model, 'named_modules'), "Model does not have modules() method"
+        assert hasattr(self.model, 'named_modules'), "Model does not have named_modules() method"
         for i, ((name, m), (name_, m_)) in enumerate(zip(self.model.named_modules(), self.rf_model.named_modules())):
             assert name == name_
             # setup tracking for initial module
@@ -186,6 +187,64 @@ class PatchAggregator:
             max_acts = np.where(out == out.max())
             max_acts = np.array([i] * len(max_acts[0])), *max_acts
             self.max_activations[i] += list(zip(*max_acts))
+
+
+class PatchTracker:
+
+    def __init__(self, model, layer_name, img_size=224, batch_size=100, device=0):
+        self.model = model
+        self.layer = layer_name
+        self.patch_file = 'rf-imgs/%s.npy' % layer_name
+        assert path.exists(self.patch_file)
+        self.patches = np.load(self.patch_file).transpose(0, 3, 1, 2)
+        self.activations = []
+        self.img_size = img_size
+        self.batch_size = batch_size
+        self.device = device
+        self.hook = None
+        self.m_name = None
+        self.module = None
+
+    def probe(self):
+        """
+        Probe the network layer specified at initilization to find activations across patches
+        :return: np.array of max layer activations for each patch
+        """
+        self.setup_hooks()
+
+        # gather patches
+        def shape2slice(shape):
+            return tuple([slice(0, s) for s in shape])
+
+        for i in tqdm(range(0, self.patches.shape[0], self.batch_size)):
+            batch = torch.zeros(self.batch_size, 3, self.img_size, self.img_size).cuda(self.device)
+            data = torch.cuda.FloatTensor(self.patches[i: i+self.batch_size])
+            batch[shape2slice(data.shape)] = data
+
+            with torch.no_grad():
+                self.model(batch)
+
+        ret = np.concatenate(self.activations, axis=0)
+        self.activations = []
+        self.remove_hook()
+        return ret
+
+    def setup_hooks(self):
+        assert hasattr(self.model, 'named_modules'), "Model does not have named_modules() method"
+        for i, (name, m) in enumerate(self.model.named_modules()):
+            # setup tracking for initial module
+            if name == self.layer:
+                self.hook = m.register_forward_hook(self.f_hook)
+                self.m_name = name
+                self.module = m
+
+    def f_hook(self, module, input, output):
+        # get maximum activation for each patch in the batch
+        self.activations += [output.max(dim=3)[0].max(dim=2)[0].max(dim=1)[0].cpu().numpy()]
+
+    def remove_hook(self):
+        self.hook.remove()
+        self.hook = None
 
 
 class FeatureVis:
@@ -263,7 +322,7 @@ class FeatureVis:
         return self.current_input[rfield_idx], rfield_idx
 
     def setup_hooks(self):
-        assert hasattr(self.model, 'named_modules'), "Model does not have modules() method"
+        assert hasattr(self.model, 'named_modules'), "Model does not have named_modules() method"
         for i, (name, m) in enumerate(self.model.named_modules()):
             # setup tracking for initial module
             if i == 1:  # (first module in named_modules is the entire network, itself
