@@ -84,6 +84,9 @@ parser.add_argument("--num_iters", default=1000, type=int,
                          " each class seen equal number of times)")
 parser.add_argument("--fix_explr", action='store_true',
                     help="Fix the number of exemplars per class")
+parser.add_argument('--mix_class', action='store_true',
+                    help='Whether to split into subtasks after getting permutation (same class potentially '
+                         'in multiple subtasks)')
 
 # Model options
 parser.add_argument("--algo", default="icarl", type=str,
@@ -261,7 +264,8 @@ else:
     perm_id = np.arange(total_classes)
 
 all_classes = list(perm_id)
-perm_id = group_classes(list(perm_id))
+if not args.mix_class:
+    perm_id = group_classes(list(perm_id))
 
 print("perm_id:", perm_id)
 
@@ -289,6 +293,9 @@ if args.num_iters > len(perm_id):
     for i in range(len(perm_id_all)):
         perm_id_all[i] = perm_id[perm_id_all[i]]
     perm_id = perm_id_all
+
+if args.mix_class:
+    perm_id = group_classes(list(perm_id))
 
 train_set = iCIFAR100(args, root="./data",
                              train=True,
