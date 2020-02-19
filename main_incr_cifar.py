@@ -142,7 +142,7 @@ parser.add_argument("--batch_size_corr", type=int, default=50,
 parser.add_argument('--probe', action='store_true',
                     help='Carry out probing of feature map with previously obtained patches')
 parser.add_argument('--feat_vis', action='store_true', help='Carry out visualization of feature map encodings')
-parser.add_argument('--feat_vis_layer_name', type=str, default='layer2.0.conv1',
+parser.add_argument('--feat_vis_layer_name', nargs='+', type=str, default=['layer2.0.conv1'],
                     help='Index of the layer at which to conduct visualization')
 parser.add_argument('--feat_vis_filter_idx', type=int, default=0, help='Index of the filter to visualize')
 
@@ -236,7 +236,7 @@ if args.resume_outfile:
 if args.feat_vis:
     feat_tracker = FeatureVis(model.model, args.feat_vis_layer_name, args.feat_vis_filter_idx, args.outfile)
 if args.probe:
-    probe = PatchTracker(model.model, args.feat_vis_layer_name)
+    probes = [PatchTracker(model.model, layer_name) for layer_name in args.feat_vis_layer_name]
 
 corr_model = None
 if args.feat_corr:
@@ -483,7 +483,7 @@ def train_run(device):
     print("Args: ", args)
     train_wait_time = 0
 
-    running_activations = None
+    running_activations = {}
 
     while s < args.num_iters:
         time_ptr = time.time()
@@ -603,13 +603,15 @@ def train_run(device):
             feat_tracker.advance_epoch()
 
         if args.probe:
-            max_activations = probe.probe()
-            if running_activations is None:
-                running_activations = max_activations.reshape(1, -1)
-                np.save('%s-activations.npy' % args.outfile.split('.')[0], running_activations)
-            else:
-                running_activations = np.concatenate([running_activations, max_activations.reshape(1, -1)], axis=0)
-                np.save('%s-activations.npy' % args.outfile.split('.')[0], running_activations)
+            for probe in probes:
+                max_activations = probe.probe()
+                if probe.layer not in running_activations:
+                    running_activations[probe.layer] = max_activations.reshape(1, probe.num_patch, -1)
+                else:
+                    running_activations[probe.layer] = \
+                        np.concatenate([running_activations[probe.layer],
+                                        max_activations.reshape(1, probe.num_patch, -1)], axis=0)
+            np.savez('%s-activations.npy' % args.outfile.split('.')[0], **running_activations)
 
     time_ptr = time.time()
     all_done.wait()

@@ -18,8 +18,9 @@ class PatchAggregator:
     Class to handle visualization of maximally activating receptive field inputs for a particular conv filter
     """
 
-    def __init__(self, model, layer_name, loader, threshold=4.0):
+    def __init__(self, model, layer_name, loader, num_patch=400):
         self.loader = loader
+        self.num_patch = num_patch
         self.model = model
         self.model.eval()
         self.rf_model = copy.deepcopy(model)
@@ -34,7 +35,6 @@ class PatchAggregator:
         self.save_dir = 'rf-imgs/%s' % layer_name
         Path(self.save_dir).mkdir(exist_ok=True, parents=True)
         self.epoch = 0
-        self.threshold = threshold
         self.max_activations = [[] for i in range(loader.batch_size)]
         self.f_hook = None
         self.f_hook_rf = None
@@ -75,15 +75,19 @@ class PatchAggregator:
         def shape2slice(shape):
             return slice(0, shape[0]), slice(0, shape[1]), slice(None)
 
-        max_shape = max([inp.shape[0] for inp in self.max_rf_input]), \
-                    max([inp.shape[1] for inp in self.max_rf_input]), 3
-        saved_inputs = np.zeros((len(self.max_rf_input), *max_shape))
-        for i, inp in enumerate(self.max_rf_input):
-            saved_inputs[(i, *shape2slice(inp.shape))] = inp
-        if self.saved_inputs is None:
-            self.saved_inputs = saved_inputs
+        if self.saved_inputs is not None:
+            max_shape = max([inp.shape[0] for inp in self.max_rf_input] + [self.saved_inputs.shape[1]]), \
+                        max([inp.shape[1] for inp in self.max_rf_input] + [self.saved_inputs.shape[2]]), 3
+            saved_inputs = np.zeros((len(self.max_rf_input) + self.saved_inputs.shape[0], *max_shape))
+            saved_inputs[(slice(self.saved_inputs.shape[0]), *shape2slice(self.saved_inputs.shape[1:]))] = self.saved_inputs
         else:
-            self.saved_inputs = np.concatenate([self.saved_inputs, saved_inputs], axis=0)
+            max_shape = max([inp.shape[0] for inp in self.max_rf_input]), \
+                        max([inp.shape[1] for inp in self.max_rf_input]), 3
+            saved_inputs = np.zeros((len(self.max_rf_input), *max_shape))
+        start_idx = 0 if self.saved_inputs is None else self.saved_inputs.shape[0]
+        for i, inp in enumerate(self.max_rf_input, start_idx):
+            saved_inputs[(i, *shape2slice(inp.shape))] = inp
+        self.saved_inputs = saved_inputs
         np.save('%s.npy' % self.save_dir, self.saved_inputs)
         self.img_index += len(self.max_rf_input)
         self.max_rf_input = []
@@ -153,7 +157,8 @@ class PatchAggregator:
             # max_activations should be a list(list(idx)) for activation[idx] = a particular max activation
 
             # get list of samples for which max activations were found
-            samples = [s for idxs, s in zip(self.max_activations, range(self.loader.batch_size)) if len(idxs) > 0]
+            #samples = [s for idxs, s in zip(self.max_activations, range(self.loader.batch_size)) if len(idxs) > 0]
+            samples = [x[0][0] for x in self.max_activations if len(x) > 0]
             next_batch = zip(*[idxs.pop(0) for idxs in self.max_activations if len(idxs) > 0])
             next_batch = tuple([np.array(idxs) for idxs in next_batch])
             next_batch = output[next_batch]
@@ -183,10 +188,15 @@ class PatchAggregator:
         # determine maximal activations in each sample
         # TODO try simply gathering highest activations for each sample
         output = output.cpu()
+        max_acts = []
         for i, out in enumerate(output):
-            max_acts = np.where(out == out.max())
-            max_acts = np.array([i] * len(max_acts[0])), *max_acts
-            self.max_activations[i] += list(zip(*max_acts))
+            max_acts_ = np.where(out == out.max())
+            max_acts_ = np.array([i] * len(max_acts_[0])), *max_acts_
+            max_acts_ = list(zip(*max_acts_))
+            max_acts += [tuple([out.max().item()] + [max_acts_])]
+        max_acts = sorted(max_acts, reverse=True)[:self.num_patch*self.loader.batch_size//len(self.loader.dataset)]
+        for val, act in max_acts:
+            self.max_activations += [act]
 
 
 class PatchTracker:
@@ -197,6 +207,7 @@ class PatchTracker:
         self.patch_file = 'rf-imgs/%s.npy' % layer_name
         assert path.exists(self.patch_file)
         self.patches = np.load(self.patch_file).transpose(0, 3, 1, 2)
+        self.num_patch = self.patches.shape[0]
         self.activations = []
         self.img_size = img_size
         self.batch_size = batch_size
@@ -240,7 +251,7 @@ class PatchTracker:
 
     def f_hook(self, module, input, output):
         # get maximum activation for each patch in the batch
-        self.activations += [output.max(dim=3)[0].max(dim=2)[0].max(dim=1)[0].cpu().numpy()]
+        self.activations += [output.max(dim=3)[0].max(dim=2)[0].cpu().numpy()]
 
     def remove_hook(self):
         self.hook.remove()
