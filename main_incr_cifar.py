@@ -245,7 +245,8 @@ if args.feat_corr:
     for p in corr_model.parameters():
         p.requires_grad = False
 
-assert total_classes % num_classes == 0
+if not args.mix_class:
+    assert total_classes % num_classes == 0
 
 def group_classes(classes):
     if num_classes > 1:
@@ -514,7 +515,7 @@ def train_run(device):
         curr_expanded = []
         for c in curr_class:
 
-            if c not in model.classes_map:
+            if c not in model.classes_map and c not in curr_expanded:
                 curr_expanded += [c]
         model.increment_classes(curr_expanded)
         model.cuda(device=device)
