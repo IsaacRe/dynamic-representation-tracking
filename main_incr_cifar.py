@@ -19,7 +19,7 @@ from dataset_incr_cifar import iCIFAR10, iCIFAR100
 from dataset_batch_cifar import CIFAR20
 from csv_writer import CSVWriter
 from feature_matching import match
-from feature_vis import FeatureVis, PatchTracker
+from feature_vis_2 import PatchTracker
 
 parser = argparse.ArgumentParser(description="Incremental learning")
 
@@ -141,10 +141,10 @@ parser.add_argument("--batch_size_corr", type=int, default=50,
 # Feature Visualization Options
 parser.add_argument('--probe', action='store_true',
                     help='Carry out probing of feature map with previously obtained patches')
-parser.add_argument('--feat_vis', action='store_true', help='Carry out visualization of feature map encodings')
 parser.add_argument('--feat_vis_layer_name', nargs='+', type=str, default=['layer2.0.conv1'],
                     help='Index of the layer at which to conduct visualization')
-parser.add_argument('--feat_vis_filter_idx', type=int, default=0, help='Index of the filter to visualize')
+parser.add_argument('--track_grad', action='store_true',
+                    help='Whether to track gradient information as well as activations when probing')
 
 # System options
 parser.add_argument("--test_freq", default=1, type=int,
@@ -181,6 +181,10 @@ if len(sys.argv)==1:
 args = parser.parse_args()
 if args.debug:
     args.num_workers = 1
+
+if args.track_grad:
+    args.probe = True
+
 torch.backends.cudnn.benchmark = True
 mp.set_sharing_strategy("file_system")
 expt_githash = subprocess.check_output(["git", "describe", "--always"])
@@ -231,12 +235,6 @@ K = args.num_exemplars  # total number of exemplars
 model = IncrNet(args, device=train_device, cifar=True)
 if args.resume_outfile:
     model.from_resnet(args.resume_outfile)
-
-# set up running feature visualization
-if args.feat_vis:
-    feat_tracker = FeatureVis(model.model, args.feat_vis_layer_name, args.feat_vis_filter_idx, args.outfile)
-if args.probe:
-    probes = [PatchTracker(model.model, layer_name) for layer_name in args.feat_vis_layer_name]
 
 corr_model = None
 if args.feat_corr:
@@ -323,6 +321,12 @@ test_all_set = CIFAR20(all_classes,
                       download=True,
                       transform=None,
                       mean_image=mean_image)
+
+# set up running feature tracking
+if args.probe:
+    probe = PatchTracker(args.feat_vis_layer_name, test_all_set, track_grad=args.track_grad, device=test_device,
+                         patch_file='cifar%d' % total_classes, save_file=args.outfile,
+                         num_workers=0 if args.debug else args.num_workers)
 
 print(len(train_set))
 print(num_classes)
@@ -600,19 +604,6 @@ def train_run(device):
                  exemplar_data=np.array(exemplar_data))
         # loop var increment
         s += 1
-        if args.feat_vis:
-            feat_tracker.advance_epoch()
-
-        if args.probe:
-            for probe in probes:
-                max_activations = probe.probe()
-                if probe.layer not in running_activations:
-                    running_activations[probe.layer] = max_activations.reshape(1, probe.num_patch, -1)
-                else:
-                    running_activations[probe.layer] = \
-                        np.concatenate([running_activations[probe.layer],
-                                        max_activations.reshape(1, probe.num_patch, -1)], axis=0)
-            np.savez('%s-activations.npy' % args.outfile.split('.')[0], **running_activations)
 
     time_ptr = time.time()
     all_done.wait()
@@ -737,6 +728,11 @@ def test_run(device):
             # add nodes for unseen classes to output layer
             test_model.increment_classes([c for c in all_classes if c not in test_model.classes_map])
             test_model.cuda(device=device)
+
+            ########################## Activation and Gradient Probing ##################################
+
+            if args.probe:
+                probe.probe(test_model.model)
 
             ########################## Correlation Analysis #############################################
 
