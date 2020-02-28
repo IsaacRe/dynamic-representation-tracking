@@ -170,9 +170,6 @@ parser.set_defaults(resume=False)
 parser.set_defaults(one_gpu=False)
 parser.set_defaults(sample_w_replacement=True)
 
-
-
-
 # Print help if no arguments passed
 if len(sys.argv)==1:
     parser.print_help(sys.stderr)
@@ -184,6 +181,9 @@ if args.debug:
 
 if args.track_grad:
     args.probe = True
+
+# ensure samples is a multiple of num_classes
+args.lexp_len = (args.lexp_len // args.num_classes) * args.num_classes
 
 torch.backends.cudnn.benchmark = True
 mp.set_sharing_strategy("file_system")

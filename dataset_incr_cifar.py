@@ -43,8 +43,7 @@ class iCIFAR10(CIFAR10):
         self.sample = args.sample
         self.n_classes = n_classes
 
-        assert self.num_e_frames % n_classes == 0, 'lexp_len must be a multiple of n_classes'
-        num_train = self.num_e_frames
+        num_train = self.num_e_frames * self.n_classes
         self.num_train = num_train
 
         # Select a subset of classes for incremental training and testing
