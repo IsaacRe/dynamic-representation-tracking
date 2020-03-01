@@ -1,5 +1,6 @@
 from model import IncrNet
 import cv2
+from copy import deepcopy
 import torch
 from torch.autograd import Variable
 import torchvision.transforms as transforms
@@ -132,6 +133,12 @@ parser.add_argument('--ft_fc_lr', type=float, default=0.002,
                     help='Lr for fc layer finetuning')
 
 # Matching Feature Correlation Analysis options
+parser.add_argument('--corr_model_type', type=str, choices=['incr, batch'], default='incr',
+                    help='Which type of pretrained model to use for correlation analysis')
+parser.add_argument('--corr_model_incr', type=str, default='incr_model-cifar20-model.pth.tar',
+                    help='Specify IncrNet for feature match correlation')
+parser.add_argument('--corr_model_batch', type=str, default='batch_model/batch_model-cifar20-model.pth.tar',
+                    help='Specify batch trained model for correlation')
 parser.add_argument('--feat_corr', action='store_true', help='Conduct matching feature correlation analysis')
 parser.add_argument('--corr_feature_idx', type=int, default=7,
                     help='Index of the layer in model.features over which correlations will be computed')
@@ -238,7 +245,17 @@ if args.resume_outfile:
 
 corr_model = None
 if args.feat_corr:
-    corr_model = models.resnet34(pretrained=True)
+    if args.corr_model_incr:
+        copy_args = deepcopy(args)
+        copy_args.file_path = args.corr_model_incr.split('-model.')[0]
+        corr_model = IncrNet(copy_args, device=test_device, cifar=True)
+        corr_model = model.model
+    elif args.corr_model_batch:
+        corr_model = IncrNet(args, device=test_device, cifar=True)
+        corr_model.from_resnet(args.corr_model_batch)
+        corr_model = model.model
+    else:
+        corr_model = models.resnet34(pretrained=True)
     corr_model.eval()
     for p in corr_model.parameters():
         p.requires_grad = False
