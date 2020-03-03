@@ -21,9 +21,9 @@ from dataset_batch_cifar import CIFAR20
 from csv_writer import CSVWriter
 from feature_matching import match
 from feature_vis_2 import PatchTracker
+from feature_generalizability import ANOVATracker
 
 parser = argparse.ArgumentParser(description="Incremental learning")
-
 
 # Saving options
 parser.add_argument("--outfile", default="results/temp.csv", type=str,
@@ -152,6 +152,7 @@ parser.add_argument('--feat_vis_layer_name', nargs='+', type=str, default=['laye
                     help='Index of the layer at which to conduct visualization')
 parser.add_argument('--track_grad', action='store_true',
                     help='Whether to track gradient information as well as activations when probing')
+parser.add_argument('--class_anova', action='store_true', help='Track ANOVA of class-specific activation distributions')
 
 # System options
 parser.add_argument("--test_freq", default=1, type=int,
@@ -344,6 +345,10 @@ if args.probe:
     probe = PatchTracker(args.feat_vis_layer_name, test_all_set, track_grad=args.track_grad, device=test_device,
                          patch_file='cifar%d' % total_classes, save_file=args.outfile,
                          num_workers=0 if args.debug else args.num_workers)
+
+if args.class_anova:
+    anova = ANOVATracker(args.feat_vis_layer_name, args.outfile.split('.')[0] + '-F_stats.npz', device=test_device,
+                         n_classes=total_classes)
 
 print(len(train_set))
 print(num_classes)
@@ -745,6 +750,11 @@ def test_run(device):
             # add nodes for unseen classes to output layer
             test_model.increment_classes([c for c in all_classes if c not in test_model.classes_map])
             test_model.cuda(device=device)
+
+            ########################## ANOVA Class-activation Test ######################################
+
+            if args.class_anova:
+                anova.gather(test_model.model, loader=test_all_loader)
 
             ########################## Activation and Gradient Probing ##################################
 
