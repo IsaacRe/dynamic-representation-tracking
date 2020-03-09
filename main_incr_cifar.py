@@ -166,6 +166,7 @@ parser.add_argument("--one_gpu", dest="one_gpu", action="store_true",
 parser.add_argument("--debug", action='store_true',
                     help="Set DataLoaders to num_workers=0 for debugging in data iteration loop")
 
+parser.add_argument('--diff_perm', action='store_true')
 
 parser.set_defaults(ncm=False)
 parser.set_defaults(dist=False)
@@ -295,7 +296,7 @@ if args.num_iters > len(perm_id):
     perm_file = "permutation_files/permutation_%d_%d.npy" \
                 % (total_classes // num_classes, num_repetitions)
 
-    if not os.path.exists(perm_file):
+    if not os.path.exists(perm_file) or args.diff_perm:
         os.makedirs("permutation_files", exist_ok=True)
         # Create random permutation file and save
         perm_arr = np.array(num_repetitions
