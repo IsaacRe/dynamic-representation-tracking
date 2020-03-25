@@ -140,6 +140,8 @@ parser.add_argument('--corr_model_incr', type=str, default='incr_model-cifar20-m
 parser.add_argument('--corr_model_batch', type=str, default='batch_model/batch_model-cifar20-model.pth.tar',
                     help='Specify batch trained model for correlation')
 parser.add_argument('--feat_corr', action='store_true', help='Conduct matching feature correlation analysis')
+parser.add_argument('--sequential_corr', action='store_true', help='Compute correlation between each sequential pair'
+                                                                   'of model features')
 parser.add_argument('--corr_feature_idx', type=int, default=7,
                     help='Index of the layer in model.features over which correlations will be computed')
 parser.add_argument("--batch_size_corr", type=int, default=50,
@@ -636,6 +638,7 @@ def train_run(device):
 
 def test_run(device):
     global test_set
+    corr_model_ = corr_model
     print("####### Test Process Running ########")
     test_model = None
     s = args.test_freq * (len(classes_seen)//args.test_freq)
@@ -656,6 +659,9 @@ def test_run(device):
             test_wait_time += time.time() - time_ptr
 
             cond_var.acquire()
+            prev_model = None
+            if s > 0:
+                prev_model = test_model
             test_model, write_data = dataQueue.get()
             expanded_classes_copy = copy.deepcopy(expanded_classes)
             test_counter.value += args.test_freq
@@ -764,18 +770,22 @@ def test_run(device):
 
             ########################## Correlation Analysis #############################################
 
-            if args.feat_corr:
+            if args.feat_corr and (prev_model is not None or not args.sequential_corr):
                 print('[Test Process] Computing Matching Feature Correlations....', end='')
                 start_time = time.time()
 
-                assert corr_model, 'Correlation Model was never loaded'
+                if args.sequential_corr:
+                    corr_model_ = prev_model.model
 
-                corr_model.cuda(device=device)
-                assert next(corr_model.parameters()).is_cuda
-                matches, corr = match(device, correlation_loader, test_model, corr_model, args.corr_feature_idx,
-                                      replace=False)
+                assert corr_model_, 'Correlation Model was never loaded'
+
+                corr_model_.cuda(device=device)
+                assert next(corr_model_.parameters()).is_cuda
+                for feat_name in args.feat_vis_layer_name:
+                    matches, corr = match(device, correlation_loader, test_model.model, corr_model_, feat_name,
+                                          replace=False)
                 # put save gpu space by putting model back when we're done
-                corr_model.cpu()
+                corr_model_.cpu()
 
                 corr_time = time.time() - start_time
 

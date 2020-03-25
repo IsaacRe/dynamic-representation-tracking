@@ -17,7 +17,7 @@ class CorrelationTracker:
     computation of correlation matrix to work
     """
 
-    def __init__(self, net=None, feature_idx=None, store_on_gpu=False, device=None):
+    def __init__(self, net=None, feature_idx=None, store_on_gpu=False, device=None, layers=None):
         """
         Initialize a CorrelationTracker object. If net and feature_idx are passed, will attempt to setup on-line
         activation tracking.
@@ -26,6 +26,14 @@ class CorrelationTracker:
         :param feature_idx: the index of the feature output to track
         :param store_on_gpu: whether to store activation values on gpu (memory-intensive)
         """
+        # initialize hook-written vars
+        self.f_hook_var = []
+        self.layers = layers
+        self.m_names = []
+        self.modules = []
+        self.m_name_lookup = {}
+        self.curr_out = {}
+
         self.net = net
         self.feature_idx = feature_idx
         self.n_feat = None
@@ -47,7 +55,36 @@ class CorrelationTracker:
         # 'save': save (overwrite) per-feature, per-sample activation values to self.activations
         self.hook_mode = 'pass'
 
-    def _get_feature_means(self, device, dataloader, feature_idx, *nets):
+    def f_hook(self, module, inp, out):
+        if self.curr_out is None:
+            self.curr_out = {}
+        self.curr_out[self.m_name_lookup[module]] = out
+
+    # TODO
+    def setup_hooks(self, model1, model2, feature_name=None):
+        assert hasattr(model1, 'named_modules'), "Model does not have named_modules() method"
+        assert hasattr(model2, 'named_modules'), "Model does not have named_modules() method"
+        for model in [model1, model2]:
+            for i, (name, m) in enumerate(model.named_modules()):
+                # setup tracking for initial module
+                if name == feature_name:
+                    self.f_hook_var += [m.register_forward_hook(self.f_hook)]
+                    if name not in self.m_names:
+                        self.m_names += [name]
+                    self.modules += [m]
+                    self.m_name_lookup[m] = name
+        assert len(self.f_hook_var) > 0
+
+    # TODO
+    def close_hooks(self):
+        for hook in self.f_hook_var:
+            hook.close()
+        self.f_hook_var = []
+        self.m_names = []
+        self.modules = []
+        self.m_name_lookup = {}
+
+    def _get_feature_means(self, device, dataloader, *nets, feature_name=None):
         """
         Returns mean of each feature over the passed data
         :param dataloader: the dataloader
@@ -61,10 +98,10 @@ class CorrelationTracker:
                 total += len(labels)
                 for j, net in enumerate(nets):
                     out = images.to(device)
-                    for k, layer in enumerate(net.children()):
-                        out = layer(out)
-                        if feature_idx == k:
-                            break
+                    self.curr_out = None
+                    net(out)
+                    assert self.curr_out is not None
+                    out = self.curr_out[feature_name]
                     if len(out.shape) > 2:
                         out = torch.mean(out, dim=(2, 3))  # Average over spatial dims sum over batch dims
                     out = torch.sum(out, dim=0)
@@ -76,15 +113,7 @@ class CorrelationTracker:
         torch.cuda.empty_cache()
         return mu
 
-    def set_mode(self, mode):
-        """
-        Configure the action to be taken during the next forward pass of self.net
-        :param mode: the action to be taken
-        :return:
-        """
-        self.hook_mode = mode
-
-    def within_net_corr(self, device, dataloader, net, feature_idx=None):
+    def within_net_corr(self, device, dataloader, net, feature_name=None):
         """
         Compute the within-net correlation on the provided data.
         :param dataloader: the dataloader
@@ -92,11 +121,12 @@ class CorrelationTracker:
         :param feature_idx: index of the layer to use. If None, will use self.feature_idx
         :return: the correlation matrix
         """
-        feature_idx = self.feature_idx if feature_idx is None else feature_idx
-        assert feature_idx is not None, "Attribute, 'feature_idx' is None and no feature_idx was explicitly provided."
+        assert feature_name is not None, 'feature_name is None'
+
+        self.setup_hooks(net, feature_name=feature_name)
 
         # get mean activation over the data for each feature
-        [mu] = self._get_feature_means(device, dataloader, feature_idx, net)
+        [mu] = self._get_feature_means(device, dataloader, net, feature_name=feature_name)
 
         corr_matr = None
         sig = None
@@ -106,10 +136,8 @@ class CorrelationTracker:
             for i, (idx, images, labels) in enumerate(dataloader):
                 total += len(labels)
                 out = images.to(device)
-                for j, layer in enumerate(net.children()):
-                    out = layer(out)
-                    if feature_idx == j:
-                        break
+                net(out)
+                out = self.curr_out[feature_name]
                 feat_w = 1
                 if len(out.shape) > 2:
                     feat_w = out.shape[2]
@@ -148,7 +176,7 @@ class CorrelationTracker:
 
         return corr_matr.cpu().numpy()
 
-    def between_net_corr(self, device, dataloader, net_1, net_2, feature_idx=None):
+    def between_net_corr(self, device, dataloader, net_1, net_2, feature_name=None):
         """
         Compute the between-net correlation for net_1, net_2 on the provided data
         :param dataloader: the dataloader
@@ -156,11 +184,12 @@ class CorrelationTracker:
         :param net_2: the second trained CNN
         :return: the correlation matrix
         """
-        feature_idx = self.feature_idx if feature_idx is None else feature_idx
-        assert feature_idx is not None, "Attribute, 'feature_idx' is None and no feature_idx was explicitly provided."
+        assert feature_name is not None, 'feature name is None'
+
+        self.setup_hooks(net_1, net_2, feature_name=feature_name)
 
         # get mean activations over the data for each feature for nets 1 and 2
-        mu = self._get_feature_means(device, dataloader, feature_idx, net_1, net_2)
+        mu = self._get_feature_means(device, dataloader, net_1, net_2, feature_name=feature_name)
 
         corr_matr = None
         sigs = [None, None]
@@ -172,10 +201,10 @@ class CorrelationTracker:
                 deviations = [None, None]
                 for j, net in enumerate([net_1, net_2]):
                     out = images.to(device)
-                    for k, layer in enumerate(net.children()):
-                        out = layer(out)
-                        if feature_idx == k:
-                            break
+                    self.curr_out = None
+                    net(out)
+                    assert self.curr_out is not None
+                    out = self.curr_out[feature_name]
                     feat_w = 1
                     if len(out.shape) > 2:
                         feat_w = out.shape[2]
@@ -261,17 +290,17 @@ def threshold_correlations(corr_matr, threshold):
     return len(np.where(np.abs(corr_matr) > threshold)[0]) / corr_matr.size
 
 
-def within_net_correlation(device, dataloader, net, feature_idx, threshold=0.7, ret_matr=False):
+def within_net_correlation(device, dataloader, net, feature_name, threshold=0.7, ret_matr=False):
     corr_tracker = CorrelationTracker()
-    corr_matr = corr_tracker.within_net_corr(device, dataloader, net, feature_idx=feature_idx)
+    corr_matr = corr_tracker.within_net_corr(device, dataloader, net, feature_name=feature_name)
     if ret_matr:
         return threshold_correlations(corr_matr, threshold), corr_matr
     return threshold_correlations(corr_matr, threshold)
 
 
-def between_net_correlation(device, dataloader, net_1, net_2, feature_idx, threshold=0.7, ret_matr=False):
+def between_net_correlation(device, dataloader, net_1, net_2, feature_name, threshold=0.7, ret_matr=False):
     corr_tracker = CorrelationTracker()
-    corr_matr = corr_tracker.between_net_corr(device, dataloader, net_1, net_2, feature_idx=feature_idx)
+    corr_matr = corr_tracker.between_net_corr(device, dataloader, net_1, net_2, feature_name=feature_name)
     if ret_matr:
         return threshold_correlations(corr_matr, threshold), corr_matr
     return threshold_correlations(corr_matr, threshold)
