@@ -169,6 +169,7 @@ parser.add_argument("--debug", action='store_true',
                     help="Set DataLoaders to num_workers=0 for debugging in data iteration loop")
 
 parser.add_argument('--diff_perm', action='store_true')
+parser.add_argument('--seed', type=int, default=1, help='Set torch and numpy seed')
 
 parser.set_defaults(ncm=False)
 parser.set_defaults(dist=False)
@@ -192,6 +193,8 @@ if args.debug:
 
 if args.track_grad:
     args.probe = True
+
+torch.manual_seed(args.seed)
 
 # ensure samples is a multiple of num_classes
 args.lexp_len = (args.lexp_len // args.num_classes) * args.num_classes
@@ -316,6 +319,8 @@ if args.num_iters > len(perm_id):
 
 if args.mix_class:
     perm_id = group_classes(list(perm_id))
+
+np.random.seed(args.seed)
 
 train_set = iCIFAR100(args, root="./data",
                              train=True,
