@@ -310,7 +310,7 @@ def match(*args, replace=True):
     _, corr_matr = between_net_correlation(*args, ret_matr=True)
     feat_match = FeatureMatcher()
     matches, corr = feat_match.one2one(corr_matr, replace=replace)
-    return matches, corr
+    return matches, corr, corr_matr
 
 
 """

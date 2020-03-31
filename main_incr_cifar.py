@@ -19,7 +19,7 @@ import pdb
 from dataset_incr_cifar import iCIFAR10, iCIFAR100
 from dataset_batch_cifar import CIFAR20
 from csv_writer import CSVWriter
-from feature_matching import match
+from feature_matching import match, between_net_correlation
 from feature_vis_2 import PatchTracker
 from feature_generalizability import ANOVATracker
 
@@ -94,7 +94,7 @@ parser.add_argument("--algo", default="icarl", type=str,
                     help="Algorithm to run. Options : icarl, e2e, lwf")
 parser.add_argument("--dist", dest="dist", action="store_true",
                     help="Option to switch off distillation loss")
-parser.add_argument("--no-pt", dest="pretrained", action="store_false",
+parser.add_argument("--no_pt", dest="pretrained", action="store_false",
                     help="Option to start from an ImageNet pretrained model")
 parser.add_argument('--sample', default='wg', type=str,
                     help='Sampling mechanism to be performed')
@@ -146,6 +146,7 @@ parser.add_argument('--corr_feature_idx', type=int, default=7,
                     help='Index of the layer in model.features over which correlations will be computed')
 parser.add_argument("--batch_size_corr", type=int, default=50,
                     help="Mini batch size for computing correlations (keep < 64)")
+parser.add_argument('--save_matr', action='store_true', help='Save correlation matrices during each iteration')
 
 # Feature Visualization Options
 parser.add_argument('--probe', action='store_true',
@@ -368,7 +369,7 @@ n_known = np.zeros(num_iters, dtype=np.int32)
 
 classes_seen = []
 model_classes_seen = []  # Class index numbers stored by model
-exemplar_data = []  # Exemplar set information stored by the model
+exemplar_data = []  # Exemplar set information stored by th
 # acc_matr row index represents class number and column index represents
 # learning exposure.
 acc_matr = np.zeros((args.total_classes, args.num_iters))
@@ -763,7 +764,7 @@ def test_run(device):
             test_model.increment_classes([c for c in all_classes if c not in test_model.classes_map])
             test_model.cuda(device=device)
 
-            ########################## ANOVA Class-activation Test ######################################
+           ########################## ANOVA Class-activation Test ######################################
 
             if args.class_anova:
                 anova.gather(test_model.model, loader=test_all_loader)
@@ -787,8 +788,15 @@ def test_run(device):
                 corr_model_.cuda(device=device)
                 assert next(corr_model_.parameters()).is_cuda
                 for feat_name in args.feat_vis_layer_name:
-                    matches, corr = match(device, correlation_loader, test_model.model, corr_model_, feat_name,
-                                          replace=False)
+                    matches, corr, matrix = match(device, correlation_loader, test_model.model, corr_model_, feat_name,
+                                                  replace=False)
+                    if args.save_matr:
+                        matrix_dir = args.outfile.split('.')[0] + '-corr_matrix/'
+                        try:
+                            os.mkdir(matrix_dir)
+                        except FileExistsError:
+                            pass
+                        np.save(matrix_dir + '%s-matr-%d.npy' % (args.outfile.split('/')[-1].split('.')[0], s), matrix)
                 # put save gpu space by putting model back when we're done
                 corr_model_.cpu()
 
@@ -863,7 +871,7 @@ def main():
     test_process.start()
 
     train_process.join()
-    print("Train Process Completed")
+    print("Train Process Completeid")
     test_process.join()
     print("Test Process Completed")
 
