@@ -18,6 +18,9 @@ import torch.multiprocessing as mp
 import atexit
 import sys
 from tqdm import tqdm
+from feature_matching import match
+from dataset_batch_cifar import CIFAR20
+from model import IncrNet
 import pdb
 
 from dataset_incr_cifar import iCIFAR10, iCIFAR100
@@ -58,7 +61,7 @@ parser.add_argument("--batch_size_test", default=200, type=int,
                     help="Mini batch size for testing")
 
 # Model options
-parser.add_argument("--pt", dest="pretrained", action="store_true",
+parser.add_argument("--no_pt", dest="pretrained", action="store_false",
                     help="Option to start from an ImageNet pretrained model")
 parser.add_argument("--ncm", dest="ncm", action="store_true",
                     help="Use nearest class mean classification (for E2E)")
@@ -85,6 +88,15 @@ parser.add_argument("--s_ch", default=0.05, type=float,
 parser.add_argument("--l_ch", default=0.1, type=float,
                     help="Color jittering : max lightness change")
 
+# Correlation Analysis/Feature Tracking Options
+parser.add_argument('--feat_vis_layer_name', nargs='+', type=str, default=['layer2.0.conv1'],
+                    help='Specify layer for feature visualziation/tracking')
+parser.add_argument('--feat_corr', action='store_true', help='Conduct correlation analysis')
+parser.add_argument('--save_matr', action='store_true', help='Save correlation matrix during each iteration')
+parser.add_argument('--batch_size_corr', type=int, default=30, help='Batch size used for correlation computation')
+parser.add_argument('--corr_model_batch', type=str, default='batch_model/batch_model-cifar20-model.pth.tar',
+                    help='Specify batch trained model for correlation')
+
 # System options
 parser.add_argument("--test_freq", default=1, type=int,
                     help="Number of iterations of training after"
@@ -95,6 +107,7 @@ parser.add_argument("--num_workers", default=8, type=int,
 parser.add_argument("--one_gpu", dest="one_gpu", action="store_true",
                     help="Option to run multiprocessing on 1 GPU")
 parser.add_argument("--debug", action='store_true')
+parser.add_argument('--seed', type=int, default=1, help='Set torch and numpy seed')
 
 parser.set_defaults(ncm=False)
 parser.set_defaults(dist=False)
@@ -114,6 +127,10 @@ args = parser.parse_args()
 torch.backends.cudnn.benchmark = True
 mp.set_sharing_strategy("file_system")
 expt_githash = subprocess.check_output(["git", "describe", "--always"])
+
+# set seed
+torch.manual_seed(args.seed)
+np.random.seed(args.seed)
 
 # multiprocessing on a single GPU
 if args.one_gpu:
@@ -148,6 +165,13 @@ def build_model():
 
 
 model = build_model()
+if args.feat_corr:
+    import pickle
+    with open('args.pkl', 'rb') as f:
+        load_args = pickle.load(f)
+    corr_model = IncrNet(load_args, device=test_device, cifar=True)
+    corr_model.from_resnet(args.corr_model_batch)
+    corr_model = corr_model.model
 
 assert mean_image is not None
 transform_jitter = transforms.ColorJitter(hue=args.h_ch, saturation=args.s_ch, brightness=args.l_ch)
@@ -187,6 +211,13 @@ test_set = CIFAR100(root="./data",
                      train=False,
                      download=True,
                      transform=test_transform)
+
+corr_set = CIFAR20(classes,
+                   root='./data',
+                   train=False,
+                   download=True,
+                   transform=None,
+                   mean_image=mean_image)
 
 num_epoch = args.num_epoch
 
@@ -240,6 +271,10 @@ train_dl = torch.utils.data.DataLoader(train_set,
 test_dl = torch.utils.data.DataLoader(test_set,
                                       num_workers=0 if args.debug else args.num_workers,
                                       batch_size=args.batch_size_test)
+if args.feat_corr:
+    correlation_loader = torch.utils.data.DataLoader(corr_set, shuffle=False,
+                                                     num_workers=0 if args.debug else args.num_workers,
+                                                     batch_size=args.batch_size_corr)
 
 acc_matr = np.zeros((int(total_classes), num_epoch))
 coverage = np.zeros((int(total_classes), num_epoch))
@@ -421,6 +456,20 @@ def test_run(device):
             print("[Test Process] =======> Test Accuracy after %d"
                   " learning exposures : " %
                   (epoch + args.test_freq), test_acc)
+
+            if args.feat_corr:
+                print("[Test Process] Computing Correlation Matrix...")
+                corr_model.cuda(device)
+                matches, corr, matrix = match(device, correlation_loader, test_model, corr_model,
+                                              args.feat_vis_layer_name[0], replace=False)
+
+                if args.save_matr:
+                    matrix_dir = args.outfile.split('.')[0] + '-corr_matrix/'
+                    try:
+                        os.mkdir(matrix_dir)
+                    except FileExistsError:
+                        pass
+                    np.save(matrix_dir + '%s-matr-%d.npy' % (args.outfile.split('/')[-1].split('.')[0], epoch), matrix)
 
             print("[Test Process] Saving model and other data")
             test_model.cpu()

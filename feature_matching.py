@@ -110,7 +110,7 @@ class CorrelationTracker:
                     else:
                         mu[j] += out
             mu = [m / total for m in mu]  # now average over batch dimension
-        torch.cuda.empty_cache()
+        #torch.cuda.empty_cache()
         return mu
 
     def within_net_corr(self, device, dataloader, net, feature_name=None):
@@ -217,7 +217,7 @@ class CorrelationTracker:
                     # get x_i - mu_i, the deviation of each feature output from its mean
                     deviations[j] = out - mu[j]  # [(B * W * H) X F]
 
-                torch.cuda.empty_cache()
+                #torch.cuda.empty_cache()
 
                 # corr_matr_temp_ij = deviations[0]_i * deviations[1]_j
                 dev_1_expanded, dev_2_expanded = [dev.unsqueeze(2).repeat(1, 1, n_feat) for dev in deviations]  # [(B * W * H) X F X F] (each)
