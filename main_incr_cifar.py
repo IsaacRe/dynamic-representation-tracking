@@ -522,6 +522,22 @@ def train_run(device):
     running_activations = {}
 
     while s < args.num_iters:
+        if s == 0:
+            cond_var.acquire()
+            train_counter.value += 1
+            expanded_classes[s % args.test_freq] = None
+
+            if train_counter.value == test_counter.value + args.test_freq:
+                temp_model = copy.deepcopy(model)
+                temp_model.cpu()
+                write_data = {'Train_loss': np.nan, 'Exposure_time': np.nan}
+                dataQueue.put((temp_model, write_data))
+            cond_var.notify_all()
+            cond_var.release()
+
+            s += 1
+            continue
+
         time_ptr = time.time()
         # Do not start training till test process catches up
         cond_var.acquire()
@@ -716,53 +732,58 @@ def test_run(device):
 
             ############################# Test Accuracy (Seen Classes) ######################################
 
-            print("[Test Process] Computing Accuracy matrix...")
-            # TODO make sure computing and storing accuracies currectly during multi-class per exposure
-            all_labels = []
-            all_preds = []
-            with torch.no_grad():
-                for indices, images, labels in test_loader:
-                    images = Variable(images).cuda(device=device)
+            # make sure test_set has been populated
+            if len(test_set) > 0:
+                print("[Test Process] Computing Accuracy matrix...")
+                # TODO make sure computing and storing accuracies currectly during multi-class per exposure
+                all_labels = []
+                all_preds = []
+                with torch.no_grad():
+                    for indices, images, labels in test_loader:
+                        images = Variable(images).cuda(device=device)
 
-                    preds = test_model.classify(images)
-                    all_preds.append(preds.data.cpu().numpy())
-                    all_labels.append(labels.numpy())
+                        preds = test_model.classify(images)
+                        all_preds.append(preds.data.cpu().numpy())
+                        all_labels.append(labels.numpy())
 
-                all_preds = np.concatenate(all_preds, axis=0)
-            all_labels = np.concatenate(all_labels, axis=0)
+                    all_preds = np.concatenate(all_preds, axis=0)
+                all_labels = np.concatenate(all_labels, axis=0)
 
-            for i in range(test_model.n_known):
-                class_preds = all_preds[all_labels == i]
-                correct = np.sum(class_preds == i)
-                total = len(class_preds)
+                for i in range(test_model.n_known):
+                    class_preds = all_preds[all_labels == i]
+                    correct = np.sum(class_preds == i)
+                    total = len(class_preds)
 
-                acc_matr[i, s] = (100.0 * correct/total)
+                    acc_matr[i, s] = (100.0 * correct/total)
 
-            test_acc = np.mean(acc_matr[:test_model.n_known, s])
+                test_acc = np.mean(acc_matr[:test_model.n_known, s])
 
-            # Track test loop time before ft-fc
-            test_time = time.time() - start_time
-            writer.write(Test_accuracy=test_acc, Test_time=test_time)
+                # Track test loop time before ft-fc
+                test_time = time.time() - start_time
+                writer.write(Test_accuracy=test_acc, Test_time=test_time)
 
-            print('[Test Process] =======> Test Accuracy after %d'
-              ' learning exposures : ' %
-              (s + args.test_freq), test_acc)
+                print('[Test Process] =======> Test Accuracy after %d'
+                  ' learning exposures : ' %
+                  (s + args.test_freq), test_acc)
 
 
-            print("[Test Process] Saving model and other data")
-            test_model.cpu()
-            test_model.num_iters_done = s + args.test_freq
-            if not args.save_all:
-                torch.save(test_model, "%s-model.pth.tar" %
-                           os.path.splitext(args.outfile)[0])
+                print("[Test Process] Saving model and other data")
+                test_model.cpu()
+                test_model.num_iters_done = s + args.test_freq
+                if not args.save_all:
+                    torch.save(test_model, "%s-model.pth.tar" %
+                               os.path.splitext(args.outfile)[0])
+                else:
+                    torch.save(test_model, "%s-saved_models/model_iter_%d.pth.tar"\
+                                            %(os.path.join(args.save_all_dir, \
+                                            os.path.splitext(args.outfile)[0]), s))
+
+                # add nodes for unseen classes to output layer
+                test_model.increment_classes([c for c in all_classes if c not in test_model.classes_map])
+                test_model.cuda(device=device)
+
             else:
-                torch.save(test_model, "%s-saved_models/model_iter_%d.pth.tar"\
-                                        %(os.path.join(args.save_all_dir, \
-                                        os.path.splitext(args.outfile)[0]), s))
-
-            # add nodes for unseen classes to output layer
-            test_model.increment_classes([c for c in all_classes if c not in test_model.classes_map])
-            test_model.cuda(device=device)
+                writer.write(Test_accuracy=np.nan, Test_time=np.nan)
 
            ########################## ANOVA Class-activation Test ######################################
 
