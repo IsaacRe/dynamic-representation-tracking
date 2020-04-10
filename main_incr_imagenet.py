@@ -321,14 +321,11 @@ print("main num_classes: ", num_classes)
 train_set = iImageNet(args, root="/home/cgu45/data",
                              n_classes=num_classes,
                              train=True,
-                             download=True,
                              transform=transform,
                              mean_image=mean_image)
-print("train set data shape: ", train_set.train_data.shape)
 test_set = iImageNet(args, root="/home/cgu45/data",
                              n_classes=num_classes,
                              train=False,
-                             download=True,
                              transform=None,
                              mean_image=mean_image)
 print("main all_classes: ", all_classes)
@@ -336,13 +333,11 @@ if args.ft_fc:
     train_fc_set = ImageNet(classes=all_classes,
                           root='/home/cgu45/data',
                           train=True,
-                          download=True,
                           transform=transform,
                           mean_image=mean_image)
 test_all_set = ImageNet(classes=all_classes,
                      root='/home/cgu45/data',
                      train=False,
-                     download=True,
                      transform=None,
                      mean_image=mean_image)
 

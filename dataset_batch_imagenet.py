@@ -1,131 +1,93 @@
 import torch
-import os
-# from torchvision.datasets import CIFAR100
 from torchvision.datasets import ImageFolder
-from torchvision import transforms
-# from torchvision.datasets import ImageNet
+import os
+from torch.utils.data import Dataset
 from PIL import Image
 import numpy as np
 import cv2
 
-import time
 
-class bImageNet(ImageFolder):
-    def __init__(self,
-                 root='/home/cgu45/data/',
-                 train=True,
-                 transform=None,
-                 target_transform=None):
-        if train:
-            root_dir = os.path.join(root, "train/")
-            super(bImageNet, self).__init__(root_dir,
-                                            transform=transform,
-                                            target_transform = target_transform)
-            if os.path.exists("data_generator/imagenet_train_data.npy"):
-                self.train_data = np.load("data_generator/imagenet_train_data.npy")
-                print("bImageNet data shape: ", self.train_data.shape)
-            else:
-                train_data = []
-                train_labels = []
-                temp_arr = []
-                for i in range(len(self.samples)):
-                    train_labels.append(super().__getitem__(i)[1])
-                    img = np.array(super().__getitem__(i)[0])
-                    temp_arr.append(img)
-                    if i % 100 == 0:
-                        train_data += temp_arr
-                        temp_arr = []
-                train_data += temp_arr
-                train_data = np.array(train_data)
-                np.save("data_generator/imagenet_train_data.npy", train_data)
-                self.train_data = train_data
-            self.train_labels = [d[1] for d in self.samples]
-        else:
-            test_dir = os.path.join(root, "test/")
-            super(bImageNet, self).__init__(test_dir,
-                                            transform=transform,
-                                            target_transform = target_transform)
-            if os.path.exists("data_generator/imagenet_test_data.npy"):
-                self.test_data = np.load("data_generator/imagenet_test_data.npy")
-            else:
-                test_data = []
-                test_labels = []
-                temp_arr = []
-                for i in range(len(self.samples)):
-                    test_labels.append(super().__getitem__(i)[1])
-                    img = np.array(super().__getitem__(i)[0])
-                    temp_arr.append(img)
-                    if i % 100 == 0:
-                        test_data += temp_arr
-                        temp_arr = []
-                test_data += temp_arr
-                test_data = np.array(test_data)
-                np.save("data_generator/imagenet_test_data.npy", test_data)
-                self.test_data = test_data
-            self.test_labels = [d[1] for d in self.samples]
-
-class ImageNet(bImageNet):
+class ImageNet(Dataset):
     def __init__(self, classes,
                  root='/home/cgu45/data/',
                  train=True,
                  mean_image=None,
                  transform=None,
-                 target_transform=None,
-                 download=False):
-
+                 target_transform=None):
+        self.classes = classes;
         self.train = train
-        super(ImageNet, self).__init__(root,
-                                       train=train,
-                                       transform=transform,
-                                       target_transform=target_transform)
+        # TODO: mean_image
+        self.transform = transform
+        self.target_transform = target_transform
+
         if train:
-            # print("image net train data 0: ", self.train_data)
-            # print("image net train labels: ", len(self.train_labels))
-            print("ImageNet initial data shape: ", self.train_data.shape)
-            print("classes: ", classes)
-            print("root: ", root)
+            train_dir = os.path.join(root, "train/")
+            dataset = ImageFolder(train_dir, transform=transform, target_transform=target_transform)
+            self.train_samples = dataset.samples
+            self.num_train = len(self.train_samples)
+
+            self.img_size = 224
+            self.train_data = \
+                np.zeros((self.num_train, 3, self.img_size, self.img_size), dtype=np.float32)
+            self.train_labels = np.zeros(self.num_train, dtype=np.int)
+            for i, (train_image, train_label) in enumerate(self.train_samples):
+                img = np.asarray(Image.open(train_image).convert("RGB"))
+                img = cv2.resize(img, (self.img_size, self.img_size)).transpose(2, 0, 1)
+                self.train_data[i] = img
+                self.train_labels[i] = train_label
+
             train_data = []
             train_labels = []
-            np_labels = np.array(self.train_labels)
-            # print("np labels shape: {}".format(np_labels.shape))
+            np_labels = self.train_labels
             for i in classes:
                 idx = np.where(np_labels == i)
                 train_data += [self.train_data[idx]]
                 train_labels += list(np_labels[idx])
             self.train_data = np.concatenate(train_data)
-            print("ImageNet concat data shape: ", self.train_data.shape)
-            self.img_size = 224
 
             self.train_labels = train_labels
 
             # resize images
-            # print("image net train data 1: ", self.train_data)
-            train_data = self.train_data
-            self.train_data = np.zeros((len(self.train_labels), self.img_size, self.img_size, 3))
-            for i, img in enumerate(train_data):
-                img = cv2.resize(img, (self.img_size, self.img_size))
-                self.train_data[i, :] = img
-            print("ImageNet reshaped data shape: ", self.train_data.shape)
+            # train_data = self.train_data
+            # self.train_data = np.zeros((len(self.train_labels), self.img_size, self.img_size, 3))
+            # for i, img in enumerate(train_data):
+                # img = cv2.resize(img, (self.img_size, self.img_size))
+                # self.train_data[i, :] = img
 
         else:
+            test_dir = os.path.join(root, "test/")
+            dataset = ImageFolder(test_dir, transform=transform, target_transform=target_transform)
+            self.test_samples = dataset.samples
+            self.num_test = len(self.test_samples)
+
+            self.img_size = 224
+            self.test_data = \
+                np.zeros((self.num_test, 3, self.img_size, self.img_size), dtype=np.float32)
+            self.test_labels = np.zeros(self.num_test, dtype=np.int)
+            for i, (test_image, test_label) in enumerate(self.test_samples):
+                img = np.asarray(Image.open(test_image).convert("RGB"))
+                img = cv2.resize(img, (self.img_size, self.img_size)).transpose(2, 0, 1)
+                self.test_data[i] = img
+                self.test_labels[i] = test_label
+
             test_data = []
             test_labels = []
-            np_labels = np.array(self.test_labels)
+            np_labels = self.test_labels
             for i in classes:
                 idx = np.where(np_labels == i)
                 test_data += [self.test_data[idx]]
                 test_labels += list(np_labels[idx])
             self.test_data = np.concatenate(test_data)
-            self.img_size = 224
 
             self.test_labels = test_labels
 
             # resize images
-            test_data = self.test_data
-            self.test_data = np.zeros((len(self.test_labels), self.img_size, self.img_size, 3))
-            for i, img in enumerate(test_data):
-                img = cv2.resize(img, (self.img_size, self.img_size))
-                self.test_data[i, :] = img
+            # test_data = self.test_data
+            # self.test_data = np.zeros((len(self.test_labels), self.img_size, self.img_size, 3))
+            # for i, img in enumerate(test_data):
+                # img = cv2.resize(img, (self.img_size, self.img_size))
+                # self.test_data[i, :] = img
+
 
         self.mean_image = mean_image
 
@@ -136,7 +98,7 @@ class ImageNet(bImageNet):
             img = self.train_data[index]
             img = Image.fromarray(np.uint8(img))
             img = np.array(self.transform(img))
-            img = img.transpose(2,0,1)
+            # img = img.transpose(2,0,1)
 
             if self.mean_image is not None:
                 img = (img - self.mean_image)/255.
@@ -163,7 +125,7 @@ class ImageNet(bImageNet):
             return index, img, target
 
         else:
-            img = self.test_data[index].transpose(2,0,1)
+            # img = self.test_data[index].transpose(2,0,1)
             img = torch.FloatTensor((img - self.mean_image)/255.)
 
             return index, img, self.test_labels[index]

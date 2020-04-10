@@ -1,5 +1,7 @@
 # from torchvision.datasets import CIFAR10
+import os
 import torchvision.transforms as transforms
+from torch.utils.data import Dataset
 import numpy as np
 import torch
 from PIL import Image
@@ -7,9 +9,10 @@ import cv2
 import time
 import copy
 from collections import Counter
-from dataset_batch_imagenet import ImageNet
+# from dataset_batch_imagenet import ImageNet
+from torchvision.datasets import ImageFolder
 
-class iImageNet(ImageNet):
+class iImageNet(Dataset):
     def __init__(self, args, root, n_classes,
                  train=True,
                  transform=None,
@@ -26,13 +29,7 @@ class iImageNet(ImageNet):
             download : Whether to download from the source
             mean_image : the mean image over the train dataset           
         """
-        # Inherits from CIFAR10, where self.train_data and self.test_data are of type uint8, dimension 32x32x3
-        super(iImageNet, self).__init__(classes=n_classes, root=root,
-                                       train=train,
-                                       transform=transform,
-                                       target_transform=target_transform,
-                                       download=download)
-        print("iImageNet data shape: ", self.train_data.shape)
+        self.train = train
         self.img_size = args.img_size
         self.aug = args.aug
         # Number of frame at each learning exposure
@@ -44,25 +41,56 @@ class iImageNet(ImageNet):
         self.sample = args.sample
         self.n_classes = n_classes
 
+        # imagenet specific section
+        if train:
+            train_dir = os.path.join(root, "train/")
+            dataset = ImageFolder(train_dir, transform=transform, target_transform=target_transform)
+            self.train_samples = dataset.samples
+            self.num_train = len(self.train_samples)
+            self.train_data = \
+                np.zeros((self.num_train, 3, self.img_size, self.img_size), dtype=np.float32)
+            self.train_labels = np.zeros(self.num_train, dtype=np.int)
+            for i, (train_image, train_label) in enumerate(self.train_samples):
+                if i % 200 == 0:
+                    print("curr iteration: ", i)
+                img = np.asarray(Image.open(train_image).convert("RGB"))
+                img = cv2.resize(img, (self.img_size, self.img_size)).transpose(2, 0, 1)
+                self.train_data[i] = img
+                self.train_labels[i] = train_label
+        else:
+            test_dir = os.path.join(root, "test/")
+            dataset = ImageFolder(test_dir, transform=transform, target_transform=target_transform)
+            self.test_samples = dataset.samples
+            self.num_test = len(self.test_samples)
+            self.test_data = \
+                np.zeros((self.num_test, 3, self.img_size, self.img_size), dtype=np.float32)
+            self.test_labels = np.zeros(self.num_test, dtype=np.int)
+            for i, (test_image, test_label) in enumerate(self.test_samples):
+                img = np.asarray(Image.open(test_image).convert("RGB"))
+                img = cv2.resize(img, (self.img_size, self.img_size)).transpose(2, 0, 1)
+                self.test_data[i] = img
+                self.test_labels[i] = test_label
+        # imagenet specific section
+
         num_train = self.num_e_frames * self.n_classes
         self.num_train = num_train
 
         # Select a subset of classes for incremental training and testing
         if self.train:
             # Resize and transpose to CxWxH all train images
-            resized_train_images = np.zeros((len(self.train_data), 3, \
-                self.img_size, self.img_size), dtype=np.uint8)
-            for i, train_image in enumerate(self.train_data):
-                resized_train_images[i] = cv2.resize(train_image, \
-                    (self.img_size, self.img_size)).transpose(2,0,1)
-            self.train_data = resized_train_images
+            # resized_train_images = np.zeros((len(self.train_data), 3, \
+                # self.img_size, self.img_size), dtype=np.uint8)
+            # for i, train_image in enumerate(self.train_data):
+                # resized_train_images[i] = cv2.resize(train_image, \
+                    # (self.img_size, self.img_size)).transpose(2,0,1)
+            # self.train_data = resized_train_images
             # if mean_image is None, compute mean image from the train set and save the mean image
             if mean_image is None:
                 self.mean_image = np.mean(np.float32(self.train_data), axis=0)
                 np.save("data_generator/imagenet_mean_image.npy", self.mean_image)
             else:
                 self.mean_image = mean_image
-            print("train data: ", self.train_data)
+            # print("train data: ", self.train_data)
             self.all_train_data = self.train_data
             self.all_train_labels = self.train_labels
             self.all_train_coverage = np.zeros(len(self.all_train_labels), \
@@ -84,12 +112,12 @@ class iImageNet(ImageNet):
 
         else:
             # Resize all test images
-            resized_test_images = np.zeros((len(self.test_data), 3, \
-                self.img_size, self.img_size), dtype=np.uint8)
-            for i, test_image in enumerate(self.test_data):
-                resized_test_images[i] = cv2.resize(test_image, \
-                    (self.img_size, self.img_size)).transpose(2,0,1)
-            self.test_data = resized_test_images
+            # resized_test_images = np.zeros((len(self.test_data), 3, \
+                # self.img_size, self.img_size), dtype=np.uint8)
+            # for i, test_image in enumerate(self.test_data):
+                # resized_test_images[i] = cv2.resize(test_image, \
+                    # (self.img_size, self.img_size)).transpose(2,0,1)
+            # self.test_data = resized_test_images
             # Load mean image if mean_image is not parsed in
             if mean_image is None:
                 self.mean_image = np.load( \
