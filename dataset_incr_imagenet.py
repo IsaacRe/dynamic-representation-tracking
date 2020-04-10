@@ -40,6 +40,8 @@ class iImageNet(Dataset):
         # weights for minibatch sampler
         self.sample = args.sample
         self.n_classes = n_classes
+        self.transform = transform
+        self.target_transform = target_transform
 
         # imagenet specific section
         if train:
@@ -243,12 +245,12 @@ class iImageNet(Dataset):
             for i, (gt_label, model_label) in enumerate(zip(classes, model_classes)):
                 rand = np.random.choice(500, self.num_e_frames, replace = self.s_w_replace)
 
+                print("gt label: ", gt_label)
+                print("all train labels unique: ", np.unique(self.all_train_labels))
+
                 s_ind = np.where( \
                     np.array(self.all_train_labels) == gt_label)[0]
 
-                print("rand: ", rand)
-                print("s_ind: ", s_ind)
-                print("all train: ", self.all_train_data)
                 s_images = self.all_train_data[s_ind[rand]]
 
                 s_labels = np.array(self.all_train_labels)[s_ind[rand]]

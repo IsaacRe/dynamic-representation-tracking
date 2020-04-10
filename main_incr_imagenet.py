@@ -318,12 +318,12 @@ if args.mix_class:
     perm_id = group_classes(list(perm_id))
 
 print("main num_classes: ", num_classes)
-train_set = iImageNet(args, root="/home/cgu45/data",
+train_set = iImageNet(args, root="/data/cgu45/",
                              n_classes=num_classes,
                              train=True,
                              transform=transform,
                              mean_image=mean_image)
-test_set = iImageNet(args, root="/home/cgu45/data",
+test_set = iImageNet(args, root="/data/cgu45/",
                              n_classes=num_classes,
                              train=False,
                              transform=None,
@@ -331,12 +331,12 @@ test_set = iImageNet(args, root="/home/cgu45/data",
 print("main all_classes: ", all_classes)
 if args.ft_fc:
     train_fc_set = ImageNet(classes=all_classes,
-                          root='/home/cgu45/data',
+                          root='/data/cgu45/',
                           train=True,
                           transform=transform,
                           mean_image=mean_image)
 test_all_set = ImageNet(classes=all_classes,
-                     root='/home/cgu45/data',
+                     root='/data/cgu45/',
                      train=False,
                      transform=None,
                      mean_image=mean_image)

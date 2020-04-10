@@ -9,7 +9,7 @@ import cv2
 
 class ImageNet(Dataset):
     def __init__(self, classes,
-                 root='/home/cgu45/data/',
+                 root='/data/cgu45/',
                  train=True,
                  mean_image=None,
                  transform=None,
