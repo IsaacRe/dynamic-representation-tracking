@@ -21,7 +21,7 @@ import pdb
 from dataset_batch_imagenet import ImageNet
 from dataset_incr_imagenet import iImageNet
 from csv_writer import CSVWriter
-from feature_matching import match, between_net_correlation
+from feature_matching import match
 from feature_vis_2 import PatchTracker
 from feature_generalizability import ANOVATracker
 
@@ -96,7 +96,7 @@ parser.add_argument("--algo", default="icarl", type=str,
                     help="Algorithm to run. Options : icarl, e2e, lwf")
 parser.add_argument("--dist", dest="dist", action="store_true",
                     help="Option to switch off distillation loss")
-parser.add_argument("--no_pt", dest="pretrained", action="store_false",
+parser.add_argument("--no-pt", dest="pretrained", action="store_false",
                     help="Option to start from an ImageNet pretrained model")
 parser.add_argument('--sample', default='wg', type=str,
                     help='Sampling mechanism to be performed')
@@ -142,13 +142,10 @@ parser.add_argument('--corr_model_incr', type=str, default='incr_model-imagenet-
 parser.add_argument('--corr_model_batch', type=str, default='batch_model/batch_model-imagenet-model.pth.tar',
                     help='Specify batch trained model for correlation')
 parser.add_argument('--feat_corr', action='store_true', help='Conduct matching feature correlation analysis')
-parser.add_argument('--sequential_corr', action='store_true', help='Compute correlation between each sequential pair'
-                                                                   'of model features')
 parser.add_argument('--corr_feature_idx', type=int, default=7,
                     help='Index of the layer in model.features over which correlations will be computed')
 parser.add_argument("--batch_size_corr", type=int, default=50,
                     help="Mini batch size for computing correlations (keep < 64)")
-parser.add_argument('--save_matr', action='store_true', help='Save correlation matrices during each iteration')
 
 # Feature Visualization Options
 parser.add_argument('--probe', action='store_true',
@@ -172,7 +169,6 @@ parser.add_argument("--debug", action='store_true',
                     help="Set DataLoaders to num_workers=0 for debugging in data iteration loop")
 
 parser.add_argument('--diff_perm', action='store_true')
-parser.add_argument('--seed', type=int, default=1, help='Set torch and numpy seed')
 
 parser.set_defaults(ncm=False)
 parser.set_defaults(dist=False)
@@ -196,8 +192,6 @@ if args.debug:
 
 if args.track_grad:
     args.probe = True
-
-torch.manual_seed(args.seed)
 
 # ensure samples is a multiple of num_classes
 args.lexp_len = (args.lexp_len // args.num_classes) * args.num_classes
@@ -323,29 +317,29 @@ if args.num_iters > len(perm_id):
 if args.mix_class:
     perm_id = group_classes(list(perm_id))
 
-np.random.seed(args.seed)
-
-train_set = iImageNet(args, root="/data/cgu45",
+print("main num_classes: ", num_classes)
+train_set = iImageNet(args, root="/data/cgu45/",
                              n_classes=num_classes,
                              train=True,
                              transform=transform,
                              mean_image=mean_image)
-test_set = iImageNet(args, root="/data/cgu45",
+test_set = iImageNet(args, root="/data/cgu45/",
                              n_classes=num_classes,
                              train=False,
                              transform=None,
                              mean_image=mean_image)
+print("main all_classes: ", all_classes)
 if args.ft_fc:
     train_fc_set = ImageNet(classes=all_classes,
-                           root='/data/cgu45',
-                           train=True,
-                           transform=transform,
-                           mean_image=mean_image)
+                          root='/data/cgu45/',
+                          train=True,
+                          transform=transform,
+                          mean_image=mean_image)
 test_all_set = ImageNet(classes=all_classes,
-                      root='./data',
-                      train=False,
-                      transform=None,
-                      mean_image=mean_image)
+                     root='/data/cgu45/',
+                     train=False,
+                     transform=None,
+                     mean_image=mean_image)
 
 # set up running feature tracking
 if args.probe:
@@ -367,7 +361,7 @@ n_known = np.zeros(num_iters, dtype=np.int32)
 
 classes_seen = []
 model_classes_seen = []  # Class index numbers stored by model
-exemplar_data = []  # Exemplar set information stored by th
+exemplar_data = []  # Exemplar set information stored by the model
 # acc_matr row index represents class number and column index represents
 # learning exposure.
 acc_matr = np.zeros((args.total_classes, args.num_iters))
@@ -520,22 +514,6 @@ def train_run(device):
     running_activations = {}
 
     while s < args.num_iters:
-        if s == 0:
-            cond_var.acquire()
-            train_counter.value += 1
-            expanded_classes[s % args.test_freq] = None
-
-            if train_counter.value == test_counter.value + args.test_freq:
-                temp_model = copy.deepcopy(model)
-                temp_model.cpu()
-                write_data = {'Train_loss': np.nan, 'Exposure_time': np.nan}
-                dataQueue.put((temp_model, write_data))
-            cond_var.notify_all()
-            cond_var.release()
-
-            s += 1
-            continue
-
         time_ptr = time.time()
         # Do not start training till test process catches up
         cond_var.acquire()
@@ -593,8 +571,7 @@ def train_run(device):
             model.reduce_exemplar_sets(m)
         # Construct exemplar sets for current class
         print("Constructing exemplar set for class index (%s) , (%s) ..." %
-              (', '.join(map(lambda x: str(x), model_curr_class_idx)), ', '.join(map(lambda x: str(x), curr_class))),
-              end="")
+              (', '.join(map(lambda x: str(x), model_curr_class_idx)), ', '.join(map(lambda x: str(x), curr_class))), end="")
         images, le_maps = train_set.get_image_classes(
                 model_curr_class_idx)
         mean_images = np.array([mean_image]*len(images[0]))
@@ -658,7 +635,6 @@ def train_run(device):
 
 def test_run(device):
     global test_set
-    corr_model_ = corr_model
     print("####### Test Process Running ########")
     test_model = None
     s = args.test_freq * (len(classes_seen)//args.test_freq)
@@ -679,9 +655,6 @@ def test_run(device):
             test_wait_time += time.time() - time_ptr
 
             cond_var.acquire()
-            prev_model = None
-            if s > 0:
-                prev_model = test_model
             test_model, write_data = dataQueue.get()
             expanded_classes_copy = copy.deepcopy(expanded_classes)
             test_counter.value += args.test_freq
@@ -730,57 +703,55 @@ def test_run(device):
 
             ############################# Test Accuracy (Seen Classes) ######################################
 
-            # make sure test_set has been populated
-            if len(test_set) > 0:
-                print("[Test Process] Computing Accuracy matrix...")
-                # TODO make sure computing and storing accuracies currectly during multi-class per exposure
-                all_labels = []
-                all_preds = []
-                with torch.no_grad():
-                    for indices, images, labels in test_loader:
-                        images = Variable(images).cuda(device=device)
+            print("[Test Process] Computing Accuracy matrix...")
+            # TODO make sure computing and storing accuracies currectly during multi-class per exposure
+            all_labels = []
+            all_preds = []
+            with torch.no_grad():
+                for indices, images, labels in test_loader:
+                    images = Variable(images).cuda(device=device)
 
-                        preds = test_model.classify(images)
-                        all_preds.append(preds.data.cpu().numpy())
-                        all_labels.append(labels.numpy())
+                    preds = test_model.classify(images)
+                    all_preds.append(preds.data.cpu().numpy())
+                    all_labels.append(labels.numpy())
 
-                    all_preds = np.concatenate(all_preds, axis=0)
-                all_labels = np.concatenate(all_labels, axis=0)
+                all_preds = np.concatenate(all_preds, axis=0)
+            all_labels = np.concatenate(all_labels, axis=0)
 
-                for i in range(test_model.n_known):
-                    class_preds = all_preds[all_labels == i]
-                    correct = np.sum(class_preds == i)
-                    total = len(class_preds)
+            for i in range(test_model.n_known):
+                class_preds = all_preds[all_labels == i]
+                correct = np.sum(class_preds == i)
+                total = len(class_preds)
 
-                    acc_matr[i, s] = (100.0 * correct/total)
+                acc_matr[i, s] = (100.0 * correct/total)
 
-                test_acc = np.mean(acc_matr[:test_model.n_known, s])
+            test_acc = np.mean(acc_matr[:test_model.n_known, s])
 
-                # Track test loop time before ft-fc
-                test_time = time.time() - start_time
-                writer.write(Test_accuracy=test_acc, Test_time=test_time)
+            # Track test loop time before ft-fc
+            test_time = time.time() - start_time
+            writer.write(Test_accuracy=test_acc, Test_time=test_time)
 
-                print('[Test Process] =======> Test Accuracy after %d'
-                  ' learning exposures : ' %
-                  (s + args.test_freq), test_acc)
+            print('[Test Process] =======> Test Accuracy after %d'
+              ' learning exposures : ' %
+              (s + args.test_freq), test_acc)
 
 
-                print("[Test Process] Saving model and other data")
-                test_model.cpu()
-                test_model.num_iters_done = s + args.test_freq
-                if not args.save_all:
-                    torch.save(test_model, "%s-model.pth.tar" %
-                               os.path.splitext(args.outfile)[0])
-                else:
-                    torch.save(test_model, "%s-saved_models/model_iter_%d.pth.tar"\
-                                            %(os.path.join(args.save_all_dir, \
-                                            os.path.splitext(args.outfile)[0]), s))
+            print("[Test Process] Saving model and other data")
+            test_model.cpu()
+            test_model.num_iters_done = s + args.test_freq
+            if not args.save_all:
+                torch.save(test_model, "%s-model.pth.tar" %
+                           os.path.splitext(args.outfile)[0])
+            else:
+                torch.save(test_model, "%s-saved_models/model_iter_%d.pth.tar"\
+                                        %(os.path.join(args.save_all_dir, \
+                                        os.path.splitext(args.outfile)[0]), s))
 
-                # add nodes for unseen classes to output layer
-                test_model.increment_classes([c for c in all_classes if c not in test_model.classes_map])
-                test_model.cuda(device=device)
+            # add nodes for unseen classes to output layer
+            test_model.increment_classes([c for c in all_classes if c not in test_model.classes_map])
+            test_model.cuda(device=device)
 
-           ########################## ANOVA Class-activation Test ######################################
+            ########################## ANOVA Class-activation Test ######################################
 
             if args.class_anova:
                 anova.gather(test_model.model, loader=test_all_loader)
@@ -792,29 +763,18 @@ def test_run(device):
 
             ########################## Correlation Analysis #############################################
 
-            if args.feat_corr and (prev_model is not None or not args.sequential_corr):
+            if args.feat_corr:
                 print('[Test Process] Computing Matching Feature Correlations....', end='')
                 start_time = time.time()
 
-                if args.sequential_corr:
-                    corr_model_ = prev_model.model
+                assert corr_model, 'Correlation Model was never loaded'
 
-                assert corr_model_, 'Correlation Model was never loaded'
-
-                corr_model_.cuda(device=device)
-                assert next(corr_model_.parameters()).is_cuda
-                for feat_name in args.feat_vis_layer_name:
-                    matches, corr, matrix = match(device, correlation_loader, test_model.model, corr_model_, feat_name,
-                                                  replace=False)
-                    if args.save_matr:
-                        matrix_dir = args.outfile.split('.')[0] + '-corr_matrix/'
-                        try:
-                            os.mkdir(matrix_dir)
-                        except FileExistsError:
-                            pass
-                        np.save(matrix_dir + '%s-matr-%d.npy' % (args.outfile.split('/')[-1].split('.')[0], s), matrix)
+                corr_model.cuda(device=device)
+                assert next(corr_model.parameters()).is_cuda
+                matches, corr = match(device, correlation_loader, test_model, corr_model, args.corr_feature_idx,
+                                      replace=False)
                 # put save gpu space by putting model back when we're done
-                corr_model_.cpu()
+                corr_model.cpu()
 
                 corr_time = time.time() - start_time
 
@@ -887,7 +847,7 @@ def main():
     test_process.start()
 
     train_process.join()
-    print("Train Process Completeid")
+    print("Train Process Completed")
     test_process.join()
     print("Test Process Completed")
 
