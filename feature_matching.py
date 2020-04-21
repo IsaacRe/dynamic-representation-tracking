@@ -84,7 +84,7 @@ class CorrelationTracker:
         self.modules = []
         self.m_name_lookup = {}
 
-    def _get_feature_means(self, device, dataloader, *nets, feature_name=None):
+    def _get_feature_means(self, device, dataloader, *nets, feature_name=None, dump_cache=False):
         """
         Returns mean of each feature over the passed data
         :param dataloader: the dataloader
@@ -110,7 +110,10 @@ class CorrelationTracker:
                     else:
                         mu[j] += out
             mu = [m / total for m in mu]  # now average over batch dimension
-        #torch.cuda.empty_cache()
+
+        # TODO fix memory leak
+        if dump_cache:
+            torch.cuda.empty_cache()  # Hacky fix
         return mu
 
     def within_net_corr(self, device, dataloader, net, feature_name=None):
@@ -176,7 +179,7 @@ class CorrelationTracker:
 
         return corr_matr.cpu().numpy()
 
-    def between_net_corr(self, device, dataloader, net_1, net_2, feature_name=None):
+    def between_net_corr(self, device, dataloader, net_1, net_2, feature_name=None, dump_cache=False):
         """
         Compute the between-net correlation for net_1, net_2 on the provided data
         :param dataloader: the dataloader
@@ -189,7 +192,7 @@ class CorrelationTracker:
         self.setup_hooks(net_1, net_2, feature_name=feature_name)
 
         # get mean activations over the data for each feature for nets 1 and 2
-        mu = self._get_feature_means(device, dataloader, net_1, net_2, feature_name=feature_name)
+        mu = self._get_feature_means(device, dataloader, net_1, net_2, feature_name=feature_name, dump_cache=dump_cache)
 
         corr_matr = None
         sigs = [None, None]
@@ -217,7 +220,9 @@ class CorrelationTracker:
                     # get x_i - mu_i, the deviation of each feature output from its mean
                     deviations[j] = out - mu[j]  # [(B * W * H) X F]
 
-                #torch.cuda.empty_cache()
+                # TODO fix memory leak
+                if dump_cache:
+                    torch.cuda.empty_cache()  # Hacky fix
 
                 # corr_matr_temp_ij = deviations[0]_i * deviations[1]_j
                 dev_1_expanded, dev_2_expanded = [dev.unsqueeze(2).repeat(1, 1, n_feat) for dev in deviations]  # [(B * W * H) X F X F] (each)
@@ -298,16 +303,18 @@ def within_net_correlation(device, dataloader, net, feature_name, threshold=0.7,
     return threshold_correlations(corr_matr, threshold)
 
 
-def between_net_correlation(device, dataloader, net_1, net_2, feature_name, threshold=0.7, ret_matr=False):
+def between_net_correlation(device, dataloader, net_1, net_2, feature_name, threshold=0.7, ret_matr=False,
+                            dump_cache=False):
     corr_tracker = CorrelationTracker()
-    corr_matr = corr_tracker.between_net_corr(device, dataloader, net_1, net_2, feature_name=feature_name)
+    corr_matr = corr_tracker.between_net_corr(device, dataloader, net_1, net_2, feature_name=feature_name,
+                                              dump_cache=dump_cache)
     if ret_matr:
         return threshold_correlations(corr_matr, threshold), corr_matr
     return threshold_correlations(corr_matr, threshold)
 
 
-def match(*args, replace=True):
-    _, corr_matr = between_net_correlation(*args, ret_matr=True)
+def match(*args, replace=True, dump_cache=False):
+    _, corr_matr = between_net_correlation(*args, ret_matr=True, dump_cache=dump_cache)
     feat_match = FeatureMatcher()
     matches, corr = feat_match.one2one(corr_matr, replace=replace)
     return matches, corr, corr_matr

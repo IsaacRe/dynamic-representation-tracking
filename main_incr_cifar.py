@@ -810,7 +810,7 @@ def test_run(device):
                 assert next(corr_model_.parameters()).is_cuda
                 for feat_name in args.feat_vis_layer_name:
                     matches, corr, matrix = match(device, correlation_loader, test_model.model, corr_model_, feat_name,
-                                                  replace=False)
+                                                  replace=False, dump_cache=True)
                     if args.save_matr:
                         matrix_dir = args.outfile.split('.')[0] + '-corr_matrix/'
                         try:
