@@ -16,12 +16,16 @@ import atexit
 import sys
 import pdb
 
+from context_merger import ContextMerger
 from dataset_incr_cifar import iCIFAR10, iCIFAR100
 from dataset_batch_cifar import CIFAR20
 from csv_writer import CSVWriter
 from feature_matching import match, between_net_correlation
 from feature_vis_2 import PatchTracker
 from feature_generalizability import ANOVATracker
+from vc_utils.vc_dataset import set_base_dataset, get_vc_dataset, test_vc_accuracy
+from vc_utils.activation_tracker import ActivationTracker
+set_base_dataset('CIFAR')
 
 parser = argparse.ArgumentParser(description="Incremental learning")
 
@@ -157,6 +161,34 @@ parser.add_argument('--track_grad', action='store_true',
                     help='Whether to track gradient information as well as activations when probing')
 parser.add_argument('--class_anova', action='store_true', help='Track ANOVA of class-specific activation distributions')
 
+# Visual Concept (VC) Tracking Options
+parser.add_argument('--track_vc', action='store_true', help='Track VCs corresponding to filter encodings of corr_model')
+parser.add_argument('--absent_vc_threshold', type=float, default=0.0,
+                    help='Filter activation threshold below which the corresponding visual concept will be'
+                         ' considered absent')
+parser.add_argument('--present_vc_threshold', type=float, default=1.0,
+                    help='Filter activation threshold above which the corresponding visual concept will be'
+                         'considered present')
+parser.add_argument('--save_pruned_path', type=str, default='prune_masks.npz',
+                    help='Save path for computed prune masks')
+parser.add_argument('--load_pruned_path', type=str, default='prune_masks.npz',
+                    help='Load path for computed prune masks')
+parser.add_argument('--nosave_prune_mask', action='store_false', dest='save_prune_mask',
+                    help='Do not save computed prune masks to save path')
+parser.add_argument('--noload_prune_mask', action='store_false', dest='load_prune_mask',
+                    help='Do not load prune masks from load path')
+parser.add_argument('--prune_ratio', type=float, default=0.8,
+                    help='Ratio of filters to prune before compiling visual concepts dataset from filter'
+                         ' activations')
+parser.add_argument('--vc_dataset_size', type=int, default=10000,
+                    help='Number of datapoints for the binary classification task of each visual concept')
+parser.add_argument('--save_vc_weights', action='store_true', help='Store weights resulting from classification'
+                                                                   ' layer training')
+parser.add_argument('--lr_vc', type=float, default=0.01, help='Learning rate for VC classification layer')
+parser.add_argument('--batch_size_train_vc', type=int, default=100, help='Batch size for training VC classification'
+                                                                         ' layer')
+parser.add_argument('--batch_size_test_vc', type=int, default=100, help='Batch size for testing VC classification')
+
 # System options
 parser.add_argument("--test_freq", default=1, type=int,
                     help="Number of iterations of training after"
@@ -252,16 +284,17 @@ if args.resume_outfile:
     model.from_resnet(args.resume_outfile)
 
 corr_model = None
-if args.feat_corr:
+if args.feat_corr or args.track_vc:
     if args.corr_model_incr:
         copy_args = deepcopy(args)
+        copy_args.pretrained = True
         copy_args.file_path = args.corr_model_incr.split('-model.')[0]
         corr_model = IncrNet(copy_args, device=test_device, cifar=True)
-        corr_model = model.model
+        corr_model = corr_model.model
     elif args.corr_model_batch:
         corr_model = IncrNet(args, device=test_device, cifar=True)
         corr_model.from_resnet(args.corr_model_batch)
-        corr_model = model.model
+        corr_model = corr_model.model
     else:
         corr_model = models.resnet34(pretrained=True)
     corr_model.eval()
@@ -358,6 +391,8 @@ if args.probe:
 if args.class_anova:
     anova = ANOVATracker(args.feat_vis_layer_name, args.outfile.split('.')[0] + '-F_stats.npz', device=test_device,
                          n_classes=total_classes)
+
+vc_module_name = args.feat_vis_layer_name[-1]
 
 print(len(train_set))
 print(num_classes)
@@ -665,8 +700,21 @@ def test_run(device):
     test_model = None
     s = args.test_freq * (len(classes_seen)//args.test_freq)
 
+    # Initialize VC Dataset
+    # TODO should we use transform?
+    vc_save_file = args.outfile.split('.')[0] + '-vc_acc'
+    writers = [writer]
+    if args.track_vc:
+        assert corr_model is not None, 'No corr_model specified for Visual Concept identification'
+        vc_dataset = get_vc_dataset(args, corr_model, args.feat_vis_layer_name[-1], all_classes,
+                                    root='./data', train=False, transform=None, mean_image=mean_image, download=False)
+        vc_writer = CSVWriter(vc_save_file + '.cvs', 'Iteration', *(str(idx) for idx in vc_dataset.kept_idxs))
+        writers += [vc_writer]
+
+    vc_weights = []
+
     test_wait_time = 0
-    with writer:
+    with ContextMerger(*writers):
         while s < args.num_iters:
 
             # Wait till training is done
@@ -785,7 +833,21 @@ def test_run(device):
             else:
                 writer.write(Test_accuracy=np.nan, Test_time=np.nan)
 
-           ########################## ANOVA Class-activation Test ######################################
+            ######################### VC Accuracy #######################################################
+
+            if args.track_vc:
+                print('[Test Process] Testing accuracy over visual concepts...')
+                vc_acc_, vc_weight = test_vc_accuracy(args, test_model.model, vc_module_name, vc_dataset, device=device)
+                vc_acc = {str(idx): acc for idx, acc in zip(vc_dataset.kept_idxs, vc_acc_)}
+                vc_writer.write(Iteration=s, **vc_acc)
+                vc_weights += [vc_weight]
+                if args.save_vc_weights:
+                    np.save(vc_save_file + '-weights.npy', torch.stack(vc_weights, dim=0).numpy())
+
+                print('[Test Process] Average accuracy over visual concepts after %s iterations: %.2f' %
+                      (s, vc_acc_.mean()))
+
+            ########################## ANOVA Class-activation Test ######################################
 
             if args.class_anova:
                 anova.gather(test_model.model, loader=test_all_loader)

@@ -73,7 +73,7 @@ class IncrNet(nn.Module):
                 #if not self.ptr_model:
                 self.model = models.resnet34(pretrained=self.pretrained)
 
-        if not self.pretrained:
+        if not self.pretrained and not self.file_path:
             self.model.apply(kaiming_normal_init)
         feat_size = self.model.fc.in_features
         self.model.fc = nn.Linear(feat_size, 1, bias=False)

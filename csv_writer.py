@@ -64,7 +64,7 @@ class CSVWriter:
 
         # check if the provided data completes the data buffer and we can write
         if self._check_buffer_full(**data):
-            line = ', '.join(self._collect(**data))
+            line = ','.join(self._collect(**data))
             self.stream.write(line + '\n')
             self.stream.flush()
             self.lines += 1
