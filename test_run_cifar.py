@@ -238,7 +238,7 @@ test_model = IncrNet(args, device=0, cifar=True)
 
 def load_model(i, device=0):
     model = IncrNet(args, device=device, cifar=True)
-    model.from_resnet(args.save_all_dir + '-saved_models/model_iter_%d.pth.tar' % i)
+    model.from_resnet(args.save_all_dir + '-saved_models/model_iter_%d.pth.tar' % i, load_fc=True)
     return model
 
 corr_model = load_model(load_iters[-1])

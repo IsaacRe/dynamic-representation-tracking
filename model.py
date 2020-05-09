@@ -146,7 +146,7 @@ class IncrNet(nn.Module):
         """
         return self.model.children()
 
-    def from_resnet(self, model_file):
+    def from_resnet(self, model_file, load_fc=False):
         self.batch_pt = True
         model = torch.load(model_file,
                            map_location=lambda storage, loc: storage)
@@ -154,7 +154,10 @@ class IncrNet(nn.Module):
             # if we've loaded an IncrNet model, just get the resnet model
             model = model._modules['model']
         self.model = model
-        self.model.fc = self.fc
+        if load_fc:
+            self.fc = self.model.fc
+        else:
+            self.model.fc = self.fc
         self.feature_extractor = nn.Sequential(
             *list(self.model.children())[:-1])
 
