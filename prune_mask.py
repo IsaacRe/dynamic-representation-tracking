@@ -238,10 +238,12 @@ load_iters = list(range(0, num_iters, test_freq))
 
 def load_model(i, device=0):
     model = IncrNet(args, device=device, cifar=True)
-    model.from_resnet(args.save_all_dir + '-saved_models/model_iter_%d.pth.tar' % i)
+    model.from_resnet(args.save_all_dir + '-saved_models/model_iter_%d.pth.tar' % i, load_fc=True)
     return model
 
-def get_sad_acc(mask1, mask2):
+def get_sad_acc(mask1, mask2, key):
+    # print("mask1 shape: ", mask1.shape)
+    # print("mask2 shape: ", mask2.shape)
     assert(mask1.shape == mask2.shape)
     length = len(mask1)
 
@@ -252,11 +254,14 @@ def get_sad_acc(mask1, mask2):
     return 1 - (sum_diff / length)
 
 def get_recall(gt, mask):
-    assert(gt.shape == mask.shape)
+    if gt.shape == mask.shape:
+        assert(gt.shape == mask.shape)
 
-    arr = mask[gt == 1]
+        arr = mask[gt == 1]
 
-    return np.sum(arr) / len(arr)
+        return np.sum(arr) / len(arr)
+    else:
+        return 0
 
 def get_avg_acc(md1, md2):
     assert(md1.keys() == md2.keys())
@@ -264,7 +269,7 @@ def get_avg_acc(md1, md2):
     for key in md1.keys():
         mask1 = md1[key]
         mask2 = md2[key]
-        sum_acc += get_sad_acc(mask1, mask2)
+        sum_acc += get_sad_acc(mask1, mask2, key)
 
     return (sum_acc / len(md1)) * 100
 
@@ -285,7 +290,7 @@ def prune_mask(i, percent):
     t_sum = 0
 
     for name, param in model.named_parameters():
-        if "weight" in name:
+        if "weight" in name and "fc" not in name:
             alive = param.data.cpu().numpy()
             alive = alive[np.nonzero(alive)]
 
@@ -296,11 +301,11 @@ def prune_mask(i, percent):
     return mask_dicts
 
 def total_data(percent):
-    final_md = prune_mask(995, percent)
+    final_md = prune_mask(1990, percent)
     accs = []
     recs = []
 
-    for i in range(0, 1000, 5):
+    for i in range(0, 2000, 10):
         md = prune_mask(i, percent)
         acc = get_avg_acc(final_md, md)
         rec = get_avg_recall(final_md, md)
@@ -310,29 +315,36 @@ def total_data(percent):
     return accs, recs
 
 def main():
-    accs, recs = total_data(70)
-    xs = [i for i in range(0, 1000, 5)]
-    xticks = [i for i in range(0, 1000, 100)]
+    accs, recs = total_data(80)
+    xs = [i for i in range(0, 2000, 10)]
+    xticks = [i for i in range(0, 2000, 100)]
 
     sns.set()
     sns.set_palette("deep")
-    fig, (ax1, ax2) = plt.subplots(2)
-    fig.suptitle("Prune Accuracy and Recall vs Iterations")
-    ax1.plot(xs, accs, label="accuracy")
-    ax2.plot(xs, recs, label="recall")
-    ax2.set_xlabel("Iterations")
+    plt.plot(xs, accs, label="accuracy")
+    plt.plot(xs, recs, label="recall")
+    plt.xlabel("Iterations")
+    plt.ylabel("Percentage")
+    plt.xticks(xticks)
+    plt.legend()
+    plt.savefig("prune.png")
+    # fig, (ax1, ax2) = plt.subplots(2)
+    # fig.suptitle("Prune Accuracy and Recall vs Iterations")
+    # ax1.plot(xs, accs, label="accuracy")
+    # ax2.plot(xs, recs, label="recall")
+    # ax2.set_xlabel("Iterations")
 
-    ax2.set_xticks(xticks)
-    ax2.set_xticklabels(xticks, rotation=50, ha="right")
-    ax1.set_xticks(xticks)
-    ax1.set_xticklabels(xticks, rotation=50, ha="right")
+    # ax2.set_xticks(xticks)
+    # ax2.set_xticklabels(xticks, rotation=50, ha="right")
+    # ax1.set_xticks(xticks)
+    # ax1.set_xticklabels(xticks, rotation=50, ha="right")
 
-    ax1.set_ylabel("Accuracy")
-    ax2.set_ylabel("Recall")
-    ax1.legend()
-    ax2.legend()
-    fig.show()
-    fig.savefig("prune.png")
+    # ax1.set_ylabel("Accuracy")
+    # ax2.set_ylabel("Recall")
+    # ax1.legend()
+    # ax2.legend()
+    # fig.show()
+    # fig.savefig("prune.png")
 
 if __name__ == "__main__":
     main()
