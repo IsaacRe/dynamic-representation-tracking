@@ -252,6 +252,10 @@ if args.one_gpu:
 if not os.path.exists(os.path.dirname(args.outfile)):
     if len(os.path.dirname(args.outfile)) != 0:
         os.makedirs(os.path.dirname(args.outfile))
+if args.save_all_dir is None:
+    args.save_all_dir = args.outfile + '-saved_models'
+if args.save_all and not os.path.exists(args.save_all_dir):
+    os.makedirs(args.save_all_dir)
 
 batch_pt = False
 if args.resume and 'batch' in os.path.splitext(args.outfile)[0]:
@@ -821,9 +825,8 @@ def test_run(device):
                     torch.save(test_model, "%s-model.pth.tar" %
                                os.path.splitext(args.outfile)[0])
                 else:
-                    torch.save(test_model, "%s-saved_models/model_iter_%d.pth.tar"\
-                                            %(os.path.join(args.save_all_dir, \
-                                            os.path.splitext(args.outfile)[0]), s))
+                    torch.save(test_model, "%s/model_iter_%d.pth.tar"
+                                            % (args.save_all_dir, s))
 
                 # add nodes for unseen classes to output layer
                 test_model.increment_classes([c for c in all_classes if c not in test_model.classes_map])
