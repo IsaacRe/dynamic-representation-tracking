@@ -457,13 +457,6 @@ def test_run(device):
                 print("[Test Process] Saving model and other data")
                 test_model.cpu()
                 test_model.num_iters_done = s + args.test_freq
-                if not args.save_all:
-                    torch.save(test_model, "%s-model.pth.tar" %
-                               os.path.splitext(args.outfile)[0])
-                else:
-                    torch.save(test_model, "%s-saved_models/model_iter_%d.pth.tar"\
-                                            %(os.path.join(args.save_all_dir, \
-                                            os.path.splitext(args.outfile)[0]), s))
 
                 # add nodes for unseen classes to output layer
                 test_model.increment_classes([c for c in all_classes if c not in test_model.classes_map])
