@@ -54,15 +54,18 @@ class Pruner(ActivationTracker):
     def load_prune_mask(self, path):
         self.prune_mask = {m: file for m, file in np.load(path).items()}
 
+    def sort_filter_activations_by_metric(self, activations):
+        metric = self.compute_variance(self.flatten_activations(activations))
+        return metric, sorted([(v, i) for i, v in enumerate(metric)], reverse=True)
+
     def compute_prune_mask_from_activations(self, activations, prune_ratio=None, save=False):
         if prune_ratio is None:
             prune_ratio = self.prune_ratio
 
         for module_name in self.modules:
-            metric = self.compute_variance(self.flatten_activations(activations[module_name]))
+            metric, metric_sort = self.sort_filter_activations_by_metric(activations[module_name])
 
             # Sort by variance and prune
-            metric_sort = sorted([(v, i) for i, v in enumerate(metric)], reverse=True)
             cutoff = int(len(metric) * (1 - prune_ratio))
             cutoff_val = metric_sort[cutoff][0]
             self.prune_mask[module_name] = (metric < cutoff_val).numpy()

@@ -298,8 +298,6 @@ if args.feat_corr or args.track_vc:
     else:
         corr_model = models.resnet34(pretrained=True)
     corr_model.eval()
-    for p in corr_model.parameters():
-        p.requires_grad = False
 
 if not args.mix_class:
     assert total_classes % num_classes == 0
@@ -354,6 +352,7 @@ if args.num_iters > len(perm_id):
 if args.mix_class:
     perm_id = group_classes(list(perm_id))
 
+assert len(perm_id) == args.num_iters
 np.random.seed(args.seed)
 
 train_set = iCIFAR100(args, root="./data",
@@ -707,8 +706,8 @@ def test_run(device):
     if args.track_vc:
         assert corr_model is not None, 'No corr_model specified for Visual Concept identification'
         vc_dataset = get_vc_dataset(args, corr_model, args.feat_vis_layer_name[-1], all_classes,
-                                    root='./data', train=False, transform=None, mean_image=mean_image, download=False)
-        vc_writer = CSVWriter(vc_save_file + '.cvs', 'Iteration', *(str(idx) for idx in vc_dataset.kept_idxs))
+                                    root='./data', train=True, transform=transform, mean_image=mean_image, download=False)
+        vc_writer = CSVWriter(vc_save_file + '.csv', 'Iteration', *(str(idx) for idx in vc_dataset.kept_idxs))
         writers += [vc_writer]
 
     vc_weights = []

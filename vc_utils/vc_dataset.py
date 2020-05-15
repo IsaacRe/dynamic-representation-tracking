@@ -10,6 +10,7 @@ from vc_utils.activation_threshold import ConvActivationThreshold
 from vc_utils.activation_tracker import ActivationTracker
 from vc_utils.prune import Pruner
 from vc_utils.hook_utils import CustomContext, HookManager
+from vc_utils.dynamic_threshold import ThresholdLearner
 
 DATASETS = {'ImageNet': ImageNet, 'CIFAR': CIFAR20}
 
@@ -28,7 +29,7 @@ def get_vc_dataset(args, model, layer_name, *dset_args, device=0, **dset_kwargs)
     return vc_dset
 
 
-def train_classification_layer(args, network, module_name, vc_dset, device=0, act_tracker=None):
+def train_classification_layer_v1(args, network, module_name, vc_dset, device=0, act_tracker=None):
     if act_tracker is None:
         act_tracker = ActivationTracker(module_names=[module_name], network=network, store_on_gpu=True)
     in_dim = act_tracker.modules[module_name].out_channels
@@ -49,7 +50,7 @@ def train_classification_layer(args, network, module_name, vc_dset, device=0, ac
     return classification_layer
 
 
-def test_vc_accuracy(args, network, module_name, vc_dset, device=0, classification_layer=None, act_tracker=None):
+def test_vc_accuracy_v1(args, network, module_name, vc_dset, device=0, classification_layer=None, act_tracker=None):
     if act_tracker is None:
         act_tracker = ActivationTracker(module_names=[module_name], network=network, store_on_gpu=True)
     if classification_layer is None:
@@ -75,24 +76,102 @@ def test_vc_accuracy(args, network, module_name, vc_dset, device=0, classificati
     return correct / total * 100., classification_layer.conv1x1.weight.data.cpu()[:, :, 0, 0]
 
 
+def train_classification_layer(args, network, module_name, vc_dset, device=0, act_tracker=None):
+    if act_tracker is None:
+        act_tracker = ActivationTracker(module_names=[module_name], network=network, store_on_gpu=True)
+    in_dim = act_tracker.modules[module_name].out_channels
+    classification_layer = VCLogitLayer(in_dim, vc_dset.kept_idxs).to(device)
+    bce = torch.nn.BCEWithLogitsLoss(reduction='none')
+    filter_weights = None
+    weights = None
+    optim = torch.optim.SGD(classification_layer.parameters(), lr=args.lr_vc)
+    for i, img, vc_lbl in tqdm(vc_dset.get_loader(args.batch_size_train_vc)):
+        if filter_weights is None:
+            filter_weights = vc_dset.filter_weights[None, :, None, None].repeat(vc_lbl.shape[0], 1,
+                                                                                *vc_lbl.shape[2:]).to(device)
+            weights = torch.ones_like(filter_weights).to(device)
+        img, vc_lbl = img.to(device), vc_lbl.to(device)
+        with act_tracker.track_all_context():
+            network(img)
+            activations = act_tracker.get_module_activations(module_name, cpu=False)
+        out = classification_layer(activations)
+        loss = bce(out, vc_lbl)  # only use valid localities in framing loss
+        weights[:] = 1.0
+        weights[vc_lbl == 1.0] = filter_weights[vc_lbl == 1.0]
+        loss = (loss * weights).mean()
+        loss.backward()
+        optim.step()
+        optim.zero_grad()
+
+    return classification_layer
+
+
+def test_vc_accuracy(args, network, module_name, vc_dset, device=0, classification_layer=None, act_tracker=None):
+    if act_tracker is None:
+        act_tracker = ActivationTracker(module_names=[module_name], network=network, store_on_gpu=True)
+    if classification_layer is None:
+        classification_layer = train_classification_layer(args, network, module_name, vc_dset,
+                                                          device=device, act_tracker=act_tracker)
+
+    total = np.zeros((vc_dset.total_classes,))
+    correct = np.zeros((vc_dset.total_classes,))
+    for i, img, vc_lbl in tqdm(vc_dset.get_loader(args.batch_size_test_vc)):
+        img, vc_lbl = img.to(device), vc_lbl.to(device)
+        with act_tracker.track_all_context():
+            network(img)
+            activations = act_tracker.get_module_activations(module_name, cpu=False)
+        out = classification_layer(activations)
+        pred = torch.sigmoid(out).round()
+        correct_mask = (pred == vc_lbl).transpose(1, 0).flatten(start_dim=1, end_dim=3)
+        correct += correct_mask.sum(dim=1).cpu().numpy()
+
+        # Get total number of valid data points for each vc class
+        total += np.array([vc_lbl.transpose(1, 0).flatten(start_dim=1, end_dim=3).shape[1]] * vc_dset.total_classes)
+
+    return correct / total * 100., classification_layer.conv1x1.weight.data.cpu()[:, :, 0, 0]
+
+
 def _define_VisualConceptDataset(base_dataset):
     class VisualConceptDataset(base_dataset):
 
         def __init__(self, args, network, module_name, *dset_args, batch_size=100, device=0, store_on_gpu=False,
-                     **dset_kwargs):
+                     version='2.0', **dset_kwargs):
             super(VisualConceptDataset, self).__init__(*dset_args, **dset_kwargs)
             self.labeler = VCLabeler(args, network, module_name, device=device, store_on_gpu=store_on_gpu)
             self.valid_localities = None
-            if hasattr(self, 'train_labels'):
-                self.class_train_labels = self.train_labels
-                self._prune_mask, self.train_labels, self.valid_localities = \
-                    self.labeler.label_data(self.get_loader(batch_size=batch_size))
-                self.total_classes = self.train_labels.shape[1]
-            if hasattr(self, 'test_labels'):
-                self.class_test_labels = self.test_labels
-                self._prune_mask, self.test_labels, self.valid_localities = \
-                    self.labeler.label_data(self.get_loader(batch_size=batch_size))
-                self.total_classes = self.test_labels.shape[1]
+            self.filter_weights = None
+            self._prune_mask = None
+
+            if version == '2.0':
+                if hasattr(self, 'train_labels'):
+                    labels_attr = 'train_labels'
+                else:
+                    assert hasattr(self, 'test_labels')
+                    labels_attr = 'test_labels'
+                setattr(self, 'class_' + labels_attr, getattr(self, labels_attr))
+                labels, self.sorted_filters = self.labeler.label_data(self.get_loader(batch_size=batch_size,
+                                                                                      shuffle=True),
+                                                                      self.get_loader(batch_size=batch_size),
+                                                                      order_by_importance=True)
+                self.total_classes = labels.shape[1]
+                setattr(self, labels_attr, labels)
+
+                # get weights for positive samples for data balancing
+                ratio_positive = labels.mean(dim=0).mean(dim=1).mean(dim=1)
+                self.filter_weights = (1 - ratio_positive) / ratio_positive
+
+            else:
+                # old code version 1.0
+                if hasattr(self, 'train_labels'):
+                    self.class_train_labels = self.train_labels
+                    self._prune_mask, self.train_labels, self.valid_localities = \
+                        self.labeler.label_data(self.get_loader(batch_size=batch_size))
+                    self.total_classes = self.train_labels.shape[1]
+                if hasattr(self, 'test_labels'):
+                    self.class_test_labels = self.test_labels
+                    self._prune_mask, self.test_labels, self.valid_localities = \
+                        self.labeler.label_data(self.get_loader(batch_size=batch_size))
+                    self.total_classes = self.test_labels.shape[1]
 
         def __getitem__(self, item):
             i, img, lbl = super(VisualConceptDataset, self).__getitem__(item)
@@ -100,15 +179,19 @@ def _define_VisualConceptDataset(base_dataset):
                 return i, img, self.valid_localities[item], lbl
             return i, img, lbl
 
-        def get_loader(self, batch_size=100):
-            return torch.utils.data.DataLoader(self, batch_size=batch_size, shuffle=False)
+        def get_loader(self, batch_size=100, shuffle=False):
+            return torch.utils.data.DataLoader(self, batch_size=batch_size, shuffle=shuffle)
 
         @property
         def kept_idxs(self):
+            if self._prune_mask is None:
+                return np.arange(self.train_labels.shape[1])
             return np.where(~self._prune_mask)[0]
 
         @property
         def pruned_idxs(self):
+            if self._prune_mask is None:
+                return np.array([])
             return np.where(self._prune_mask)[0]
 
     return VisualConceptDataset
@@ -139,7 +222,8 @@ class VCLogitLayer(torch.nn.Module):
 
 class VCLabeler:
 
-    def __init__(self, args, network, module_name, store_on_gpu=False, device=0):
+    def __init__(self, args, network, module_name, store_on_gpu=False, device=0,
+                 init_t=0.5, temperature=0.2, version='2.0'):
         self.layer_name = module_name
         self.min_data_points = args.vc_dataset_size
         self.absent_threshold = args.absent_vc_threshold
@@ -149,20 +233,35 @@ class VCLabeler:
         self.device = device
         self.hook_manager = HookManager()
         self.network = network
+        self.version = version
         self.load_pruned_path = args.load_pruned_path if exists(args.load_pruned_path) and args.load_prune_mask \
             else None
-        self.thresholder = ConvActivationThreshold(network, module_name,
-                                                   store_on_gpu=store_on_gpu,
-                                                   hook_manager=self.hook_manager)
-        self.pruner = Pruner(network, module_name,
-                             prune_ratio=args.prune_ratio,
-                             load_pruned_path=self.load_pruned_path,
-                             store_on_gpu=store_on_gpu,
-                             save_pruned_path=args.save_pruned_path,
-                             hook_manager=self.hook_manager)
-        self.act_tracker = ActivationTracker(module_names=[module_name], network=network,
-                                             store_on_gpu=store_on_gpu,
-                                             hook_manager=self.hook_manager)
+
+        # dynamic pruning
+        if version == '2.0':
+            self.dynamic_thresholder = ThresholdLearner(network, module_name, self.hook_manager, device, init_t,
+                                                        temperature)
+            self.pruner = Pruner(network, module_name,
+                                 prune_ratio=args.prune_ratio,
+                                 load_pruned_path=self.load_pruned_path,
+                                 store_on_gpu=store_on_gpu,
+                                 save_pruned_path=args.save_pruned_path,
+                                 hook_manager=self.hook_manager)
+
+        # threshold pruning
+        else:
+            self.thresholder = ConvActivationThreshold(network, module_name,
+                                                       store_on_gpu=store_on_gpu,
+                                                       hook_manager=self.hook_manager)
+            self.pruner = Pruner(network, module_name,
+                                 prune_ratio=args.prune_ratio,
+                                 load_pruned_path=self.load_pruned_path,
+                                 store_on_gpu=store_on_gpu,
+                                 save_pruned_path=args.save_pruned_path,
+                                 hook_manager=self.hook_manager)
+            self.act_tracker = ActivationTracker(module_names=[module_name], network=network,
+                                                 store_on_gpu=store_on_gpu,
+                                                 hook_manager=self.hook_manager)
 
     @staticmethod
     def get_balanced_data_mask(present, absent, min_data_points):
@@ -200,37 +299,125 @@ class VCLabeler:
 
         return present[:, kept_filter_idxs], select_samples[:, kept_filter_idxs], discard_filters
 
-    def label_data(self, loader, seed=0):
+    def label_data(self, *loaders, seed=0, order_by_importance=False):
         rand_state = np.random.get_state()
         np.random.seed(seed)
 
         self.network.to(self.device)
 
-        activations = self.act_tracker.compute_activations_from_data(loader, device=self.device)
-        if not self.load_prune_mask or not self.load_pruned_path:
-            self.pruner.compute_prune_mask_from_activations(activations, save=self.save_prune_mask)
+        if self.version == '2.0':
+            train_loader, loader = loaders
+            np.random.set_state(rand_state)
 
-        pruned = self.pruner.prune(self.layer_name, activations[self.layer_name], keep_shape=False)
+            #TODO experiments
+            """
+            accs = []
+            torch.save(self.network.state_dict(), 'temp.pth')
+            def reload_params():
+                self.network.load_state_dict(torch.load('temp.pth'))
 
-        absent = torch.zeros_like(pruned)
-        absent[pruned < self.absent_threshold] = 1.0
+            # 0 No train test on t=1.0
+            reload_params()
+            self.dynamic_thresholder.fill_thresholds(1.0)
+            accs += [self.dynamic_thresholder.test(loader, hard=True)]
 
-        present = torch.zeros_like(pruned)
-        present[pruned >= self.present_threshold] = 1.0
+            # 1 No train test on t=1.5
+            reload_params()
+            self.dynamic_thresholder.fill_thresholds(1.5)
+            accs += [self.dynamic_thresholder.test(loader, hard=True)]
 
-        labels, select_data, discard_filters = self.get_balanced_data_mask(present, absent, self.min_data_points)
-        print('VCLabeler: Discarding samples of visual concepts corresponding to %d filters due to unbalanced '
-              'concept presence/absence: %s\nTo avoid this, try different thresholds'
-              % (len(discard_filters), ', '.join(str(f) for f in discard_filters)))
+            # 2: Control, 5 epochs training - no thresholding
+            reload_params()
+            self.dynamic_thresholder.train(train_loader, epochs=3, lr_network=0.01, threshold=False)
+            accs += [self.dynamic_thresholder.test(loader, threshold=False)]
 
-        np.random.set_state(rand_state)
+            # 3: Train on hard threshold (fixed, threshold=0.5)
+            reload_params()
+            self.dynamic_thresholder.fill_thresholds(0.5)
+            self.dynamic_thresholder.train(train_loader, epochs=3, lr_network=0.01, lr_thresholds=0, hard=True)
+            accs += [self.dynamic_thresholder.test(loader, hard=True)]
 
-        # Prune filters whose visual concepts were excluded from dataset due to imbalance
-        if len(discard_filters) > 0:
-            (kept_filters,) = np.where(~self.pruner.prune_mask[self.layer_name])
-            self.pruner.prune_mask[self.layer_name][kept_filters[np.array(list(discard_filters))]] = True
+            # 4: Train on soft threshold (fixed, threshold=0.5)
+            reload_params()
+            self.dynamic_thresholder.fill_thresholds(0.5)
+            self.dynamic_thresholder.train(train_loader, epochs=3, lr_network=0.01, lr_thresholds=0, hard=False)
+            accs += [self.dynamic_thresholder.test(loader, hard=True)]
 
-        return self.pruner.prune_mask[self.layer_name], labels, select_data
+            # 5: Train on hard threshold (fixed, threshold=1.0)
+            reload_params()
+            self.dynamic_thresholder.fill_thresholds(1.0)
+            self.dynamic_thresholder.train(train_loader, epochs=3, lr_network=0.01, lr_thresholds=0, hard=True)
+            accs += [self.dynamic_thresholder.test(loader, hard=True)]
+
+            # 6: Train on soft threshold (fixed, threshold=1.0)
+            reload_params()
+            self.dynamic_thresholder.fill_thresholds(1.0)
+            self.dynamic_thresholder.train(train_loader, epochs=3, lr_network=0.01, lr_thresholds=0, hard=False)
+            accs += [self.dynamic_thresholder.test(loader, hard=True)]
+
+            # 7: Train on hard threshold (fixed, threshold=1.5)
+            reload_params()
+            self.dynamic_thresholder.fill_thresholds(1.5)
+            self.dynamic_thresholder.train(train_loader, epochs=3, lr_network=0.01, lr_thresholds=0, hard=True)
+            accs += [self.dynamic_thresholder.test(loader, hard=True)]
+
+            # 8: Train on soft threshold (fixed, threshold=1.5)
+            reload_params()
+            self.dynamic_thresholder.fill_thresholds(1.5)
+            self.dynamic_thresholder.train(train_loader, epochs=3, lr_network=0.01, lr_thresholds=0, hard=False)
+            accs += [self.dynamic_thresholder.test(loader, hard=True)]
+            np.save('experiments-temp.npy', np.array(accs))
+            """
+
+            # train thresholds
+            #self.dynamic_thresholder.train(train_loader, epochs=3, lr_network=0.01, fit_threshold=False,
+            #                               hard_threshold=True)
+            
+            #self.dynamic_thresholder.fill_thresholds(0.5)
+
+            # test performance
+            #self.dynamic_thresholder.test(loader, threshold=False)
+
+            # predict feature presence
+            raw_activations, binary_activations = self.dynamic_thresholder.predict(loader,
+                                                                                   output_raw=order_by_importance)
+            labels = binary_activations
+
+            # arrange VCs by filter importance
+            sorted_filters = None
+            if order_by_importance:
+                importances, sorted_importances = self.pruner.sort_filter_activations_by_metric(raw_activations)
+                sorted_filters = np.array([filter_idx for importance, filter_idx in sorted_importances])
+
+            return labels, sorted_filters
+
+        else:
+            loader, = loaders
+            activations = self.act_tracker.compute_activations_from_data(loader, device=self.device)
+            if not self.load_prune_mask or not self.load_pruned_path:
+                self.pruner.compute_prune_mask_from_activations(activations, save=self.save_prune_mask)
+
+            pruned = self.pruner.prune(self.layer_name, activations[self.layer_name], keep_shape=False)
+
+            absent = torch.zeros_like(pruned)
+            absent[pruned < self.absent_threshold] = 1.0
+
+            present = torch.zeros_like(pruned)
+            present[pruned >= self.present_threshold] = 1.0
+
+            labels, select_data, discard_filters = self.get_balanced_data_mask(present, absent, self.min_data_points)
+            print('VCLabeler: Discarding samples of visual concepts corresponding to %d filters due to unbalanced '
+                  'concept presence/absence: %s\nTo avoid this, try different thresholds'
+                  % (len(discard_filters), ', '.join(str(f) for f in discard_filters)))
+
+            np.random.set_state(rand_state)
+
+            # Prune filters whose visual concepts were excluded from dataset due to imbalance
+            if len(discard_filters) > 0:
+                (kept_filters,) = np.where(~self.pruner.prune_mask[self.layer_name])
+                self.pruner.prune_mask[self.layer_name][kept_filters[np.array(list(discard_filters))]] = True
+
+            return self.pruner.prune_mask[self.layer_name], labels, select_data
 
 
 VisualConceptDataset = NullVisualConceptDataset

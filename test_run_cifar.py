@@ -241,11 +241,24 @@ def load_model(i, device=0):
     model.from_resnet(args.save_all_dir + '-saved_models/model_iter_%d.pth.tar' % i, load_fc=True)
     return model
 
+def reorder_fc(model):
+    w = model.fc.weight.data
+    w_copy = w.clone()
+    classes_seen = np.load(args.save_all_dir + '-coverage.npz')['classes_seen'].flatten()
+    classes = []
+    for c in classes_seen:
+        if c in classes:
+            continue
+        classes += [c]
+        if len(classes) >= 20:
+            break
+    for i, c in enumerate(classes):
+        w[c] = w_copy[i]
+
 corr_model = load_model(load_iters[-1])
 corr_model = corr_model.model
+reorder_fc(corr_model)
 corr_model.eval()
-for p in corr_model.parameters():
-    p.requires_grad = False
 
 # ensure samples is a multiple of num_classes
 args.lexp_len = (args.lexp_len // args.num_classes) * args.num_classes
@@ -346,11 +359,11 @@ def test_run(device):
     # TODO should we use transform?
     vc_save_file = args.outfile.split('.')[0] + '-vc_acc'
     writers = [writer]
-    if args.track_v1c:
+    if args.track_vc:
         assert corr_model is not None, 'No corr_model specified for Visual Concept identification'
         vc_dataset = get_vc_dataset(args, corr_model, args.feat_vis_layer_name[-1], all_classes,
-                                    root='./data', train=False, transform=None, mean_image=mean_image, download=False)
-        vc_writer = CSVWriter(vc_save_file + '.cvs', 'Iteration', *(str(idx) for idx in vc_dataset.kept_idxs))
+                                    root='./data', train=True, transform=transform, mean_image=mean_image, download=False)
+        vc_writer = CSVWriter(vc_save_file + '.csv', 'Iteration', *(str(idx) for idx in vc_dataset.kept_idxs))
         writers += [vc_writer]
 
     vc_weights = []
