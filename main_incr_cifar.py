@@ -25,6 +25,7 @@ from feature_vis_2 import PatchTracker
 from feature_generalizability import ANOVATracker
 from vc_utils.vc_dataset import set_base_dataset, get_vc_dataset, test_vc_accuracy
 from vc_utils.activation_tracker import ActivationTracker
+from prune_mask import store_prune_mask
 set_base_dataset('CIFAR')
 
 parser = argparse.ArgumentParser(description="Incremental learning")
@@ -169,6 +170,8 @@ parser.add_argument('--absent_vc_threshold', type=float, default=0.0,
 parser.add_argument('--present_vc_threshold', type=float, default=1.0,
                     help='Filter activation threshold above which the corresponding visual concept will be'
                          'considered present')
+parser.add_argument('--prune', action='store_true', dest='should_prune',
+                    help='Actually performs pruning (as opposed to just computing the masks)')
 parser.add_argument('--save_pruned_path', type=str, default='prune_masks.npz',
                     help='Save path for computed prune masks')
 parser.add_argument('--load_pruned_path', type=str, default='prune_masks.npz',
@@ -214,6 +217,7 @@ parser.set_defaults(save_all=False)
 parser.set_defaults(resume=False)
 parser.set_defaults(one_gpu=False)
 parser.set_defaults(sample_w_replacement=True)
+parser.set_defaults(should_prune=False)
 
 # Print help if no arguments passed
 if len(sys.argv)==1:
@@ -827,6 +831,8 @@ def test_run(device):
                 else:
                     torch.save(test_model, "%s/model_iter_%d.pth.tar"
                                             % (args.save_all_dir, s))
+                    if s == 0:
+                        store_prune_mask(s, 80, args.save_all_dir)
 
                 # add nodes for unseen classes to output layer
                 test_model.increment_classes([c for c in all_classes if c not in test_model.classes_map])

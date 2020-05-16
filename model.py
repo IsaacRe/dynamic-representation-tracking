@@ -11,6 +11,7 @@ from utils.loader_utils import CustomBatchSampler
 from utils.model_utils import kaiming_normal_init
 from utils.model_utils import MultiClassCrossEntropyLoss
 import os
+import pickle
 
 import pdb
 
@@ -28,6 +29,7 @@ class IncrNet(nn.Module):
         self.lr_dec_factor = args.lrd
         self.llr_freq = args.llr_freq
         self.weight_decay = args.wd
+        self.should_prune = args.should_prune
 
 
 
@@ -645,6 +647,16 @@ class IncrNet(nn.Module):
                 #     print('GRADS: ')
                 #     for i, p in enumerate(self.fc.parameters()):
                 #         print(p.grad.data)
+                print("++++++++++++++++++++++++++++++++++++++++++++++++")
+                print("prune param:", self.should_prune)
+                print("++++++++++++++++++++++++++++++++++++++++++++++++")
+                if self.should_prune:
+                    with open("%s/model_iter_%d.pkl" % (self.save_all_dir, 0), "wb") as f:
+                        mask_dict = pickle.load(f)
+                        for name, mask in mask_dict.items():
+                            self.state_dict()[name].grad[mask == 0] = 0
+
+
                 optimizer.step()
 
                 tqdm.write('Epoch [%d/%d], Minibatch [%d/%d] Loss: %.4f' 
@@ -670,7 +682,7 @@ class IncrNet(nn.Module):
         '''
         torch.backends.cudnn.benchmark = True
         self.compute_means = True
-        
+
         if not bft:
             num_epoch = self.num_epoch
             lr = self.init_lr
@@ -793,6 +805,11 @@ class IncrNet(nn.Module):
                 #     p.data.add_(torch.cuda.FloatTensor(
                 #         p.shape, device=self.device).normal_(std=self.std[epoch]))
 
+                if self.should_prune:
+                    with open("%s/model_iter_%d.pkl" % (self.save_all_dir, 0), "wb") as f:
+                        mask_dict = pickle.load(f)
+                        for name, mask in mask_dict.items():
+                            self.state_dict()[name].grad[mask == 0] = 0
                 optimizer.step()
                 tqdm.write('Epoch [%d/%d], Minibatch [%d/%d] Loss: %.4f'
                            % ((epoch+1), num_epoch, i % num_batches_per_epoch+1, 

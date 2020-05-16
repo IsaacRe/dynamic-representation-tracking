@@ -17,6 +17,7 @@ import sys
 import pdb
 import seaborn as sns
 import matplotlib.pyplot as plt
+import pickle
 
 from context_merger import ContextMerger
 from dataset_incr_cifar import iCIFAR10, iCIFAR100
@@ -299,6 +300,11 @@ def prune_mask(i, percent):
             mask_dicts[name] = mask
 
     return mask_dicts
+
+def store_prune_mask(i, percent, save_all_dir):
+    mask_dicts = prune_mask(i, percent)
+    with open("%s/model_iter_%d.pkl" % (save_all_dir, i), "wb") as f:
+        pickle.dump(mask_dicts, f, pickle.HIGHEST_PROTOCOL)
 
 def total_data(percent):
     final_md = prune_mask(1990, percent)
