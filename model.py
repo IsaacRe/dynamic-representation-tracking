@@ -30,6 +30,7 @@ class IncrNet(nn.Module):
         self.llr_freq = args.llr_freq
         self.weight_decay = args.wd
         self.should_prune = args.should_prune
+        self.save_all_dir = args.save_all_dir
 
 
 
