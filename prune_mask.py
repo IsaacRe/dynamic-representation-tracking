@@ -286,9 +286,12 @@ def get_avg_recall(gt_md, md):
 
     return (sum_rec / len(gt_md)) * 100
 
-def prune_mask(i, percent):
+def prune_mask(i, percent, mod=None):
     mask_dicts = {}
-    model = load_model(i)
+    if mod is None:
+        model = load_model(i)
+    else:
+        model = mod
 
     t_sum = 0
 
@@ -302,6 +305,10 @@ def prune_mask(i, percent):
             mask_dicts[name] = mask
 
     return mask_dicts
+
+def store_prune_mask_model(model, percent, save_all_dir):
+    mask_dicts = prune_mask(0, percent, model)
+    np.savez("%s/model_iter_%d.npz" % (save_all_dir, 0), **mask_dicts)
 
 def store_prune_mask(i, percent, save_all_dir):
     mask_dicts = prune_mask(i, percent)
