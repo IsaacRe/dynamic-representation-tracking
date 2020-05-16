@@ -170,8 +170,8 @@ parser.add_argument('--absent_vc_threshold', type=float, default=0.0,
 parser.add_argument('--present_vc_threshold', type=float, default=1.0,
                     help='Filter activation threshold above which the corresponding visual concept will be'
                          'considered present')
-parser.add_argument('--prune', action='store_true', dest='should_prune',
-                    help='Actually performs pruning (as opposed to just computing the masks)')
+parser.add_argument('--should_prune', action='store_true',
+                    help='Actually performs pruning as opposed to just computing the masks')
 parser.add_argument('--save_pruned_path', type=str, default='prune_masks.npz',
                     help='Save path for computed prune masks')
 parser.add_argument('--load_pruned_path', type=str, default='prune_masks.npz',
