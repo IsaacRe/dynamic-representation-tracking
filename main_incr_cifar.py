@@ -25,7 +25,7 @@ from feature_vis_2 import PatchTracker
 from feature_generalizability import ANOVATracker
 from vc_utils.vc_dataset import set_base_dataset, get_vc_dataset, test_vc_accuracy
 from vc_utils.activation_tracker import ActivationTracker
-from prune_mask import store_prune_mask
+from prune_mask import store_prune_mask_model
 set_base_dataset('CIFAR')
 
 parser = argparse.ArgumentParser(description="Incremental learning")
@@ -569,6 +569,9 @@ def train_run(device):
             train_counter.value += 1
             expanded_classes[s % args.test_freq] = None
 
+            if args.should_prune:
+                store_prune_mask_model(model, 80, args.save_all_dir)
+
             if train_counter.value == test_counter.value + args.test_freq:
                 temp_model = copy.deepcopy(model)
                 temp_model.cpu()
@@ -831,8 +834,6 @@ def test_run(device):
                 else:
                     torch.save(test_model, "%s/model_iter_%d.pth.tar"
                                             % (args.save_all_dir, s))
-                    if s == 0:
-                        store_prune_mask(s, 80, args.save_all_dir)
 
                 # add nodes for unseen classes to output layer
                 test_model.increment_classes([c for c in all_classes if c not in test_model.classes_map])

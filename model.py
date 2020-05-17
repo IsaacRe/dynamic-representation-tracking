@@ -648,17 +648,16 @@ class IncrNet(nn.Module):
                 #     print('GRADS: ')
                 #     for i, p in enumerate(self.fc.parameters()):
                 #         print(p.grad.data)
-                print("++++++++++++++++++++++++++++++++++++++++++++++++")
-                print("prune param:", self.should_prune)
-                print("++++++++++++++++++++++++++++++++++++++++++++++++")
-                if self.should_prune:
-                    # with open("%s/model_iter_%d.pkl" % (self.save_all_dir, 0), "wb") as f:
-                    mask_dict = np.load("%s/model_iter_%d.pkl" % (self.save_all_dir, 0))
-                    for name, mask in mask_dict.items():
-                        self.state_dict()[name].grad[mask == 0] = 0
-
 
                 optimizer.step()
+                if self.should_prune:
+                    # with open("%s/model_iter_%d.pkl" % (self.save_all_dir, 0), "wb") as f:
+                    mask_dict = np.load("%s/model_iter_%d.npz" % (self.save_all_dir, 0))
+                    for name, mask in mask_dict.items():
+                        reshaped_mask = mask.reshape(self.state_dict()[name].shape)
+                        reshaped_mask = np.invert(reshaped_mask)
+                        reshaped_mask = torch.from_numpy(reshaped_mask).to(self.device)
+                        self.state_dict()[name].data[reshaped_mask] = 0
 
                 tqdm.write('Epoch [%d/%d], Minibatch [%d/%d] Loss: %.4f' 
                            % (epoch, self.num_epoch, 
@@ -806,15 +805,15 @@ class IncrNet(nn.Module):
                 #     p.data.add_(torch.cuda.FloatTensor(
                 #         p.shape, device=self.device).normal_(std=self.std[epoch]))
 
-                if self.should_prune:
-                    mask_dict = np.load("%s/model_iter_%d.pkl" % (self.save_all_dir, 0))
-                    for name, mask in mask_dict.items():
-                        self.state_dict()[name].grad[mask == 0] = 0
-                    # with open("%s/model_iter_%d.pkl" % (self.save_all_dir, 0), "wb") as f:
-                        # mask_dict = pickle.load(f)
-                        # for name, mask in mask_dict.items():
-                            # self.state_dict()[name].grad[mask == 0] = 0
                 optimizer.step()
+                if self.should_prune:
+                    # with open("%s/model_iter_%d.pkl" % (self.save_all_dir, 0), "wb") as f:
+                    mask_dict = np.load("%s/model_iter_%d.npz" % (self.save_all_dir, 0))
+                    for name, mask in mask_dict.items():
+                        reshaped_mask = mask.reshape(self.state_dict()[name].shape)
+                        reshaped_mask = np.invert(reshaped_mask)
+                        reshaped_mask = torch.from_numpy(reshaped_mask).to(self.device)
+                        self.state_dict()[name].data[reshaped_mask] = 0
                 tqdm.write('Epoch [%d/%d], Minibatch [%d/%d] Loss: %.4f'
                            % ((epoch+1), num_epoch, i % num_batches_per_epoch+1, 
                               num_batches_per_epoch, loss.data))
