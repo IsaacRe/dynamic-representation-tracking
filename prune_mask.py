@@ -359,9 +359,12 @@ def get_metrics_total(percent, total=5000, freq=10):
     return m1s, m2s
 
 def main():
-    accs, recs = total_data(80)
-    xs = [i for i in range(0, 2000, 10)]
-    xticks = [i for i in range(0, 2000, 100)]
+    percent = 80
+    total_iter = 5000
+    test_freq = 10
+    accs, recs = total_data(percent)
+    xs = [i for i in range(0, total_iter, test_freq)]
+    xticks = [i for i in range(0, total_iter, 500)]
 
     sns.set()
     sns.set_palette("deep")
