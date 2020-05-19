@@ -26,6 +26,7 @@ from feature_generalizability import ANOVATracker
 from vc_utils.vc_dataset import set_base_dataset, get_vc_dataset, test_vc_accuracy
 from vc_utils.activation_tracker import ActivationTracker
 from prune_mask import store_prune_mask_model
+
 set_base_dataset('CIFAR')
 
 parser = argparse.ArgumentParser(description="Incremental learning")
@@ -200,7 +201,7 @@ parser.add_argument("--test_freq", default=1, type=int,
                     help="Number of iterations of training after"
                          " which a test is done/model saved")
 parser.add_argument("--num_workers", default=8, type=int,
-                    help="Maximum number of threads spawned at any" 
+                    help="Maximum number of threads spawned at any"
                          "stage of execution")
 parser.add_argument("--one_gpu", dest="one_gpu", action="store_true",
                     help="Option to run multiprocessing on 1 GPU")
@@ -215,7 +216,7 @@ parser.set_defaults(dist=False)
 parser.set_defaults(pretrained=True)
 parser.set_defaults(d_order=False)
 parser.set_defaults(subset=False)
-#parser.set_defaults(jitter=True)
+# parser.set_defaults(jitter=True)
 parser.set_defaults(save_all=False)
 parser.set_defaults(resume=False)
 parser.set_defaults(one_gpu=False)
@@ -223,7 +224,7 @@ parser.set_defaults(sample_w_replacement=True)
 parser.set_defaults(should_prune=False)
 
 # Print help if no arguments passed
-if len(sys.argv)==1:
+if len(sys.argv) == 1:
     parser.print_help(sys.stderr)
     sys.exit(1)
 
@@ -265,9 +266,6 @@ if args.save_all_dir is None:
 if args.save_all and not os.path.exists(args.save_all_dir):
     os.makedirs(args.save_all_dir)
 
-num_classes = args.num_classes
-test_freq = 1
-total_classes = args.total_classes
 num_iters = args.num_iters
 
 # Conditional variable, shared vars for synchronization
@@ -284,10 +282,6 @@ if not os.path.exists("data_generator/cifar_mean_image.npy"):
     mean_image = None
 else:
     mean_image = np.load("data_generator/cifar_mean_image.npy")
-
-K = args.num_exemplars  # total number of exemplars
-
-model = IncrNet(args, device=train_device, cifar=True)
 
 def get_corr_model(args):
     if not (args.feat_corr or args.track_vc):
@@ -307,10 +301,12 @@ def get_corr_model(args):
     corr_model.eval()
     return corr_model
 
+
 def group_classes(classes, num_classes):
     if num_classes > 1:
-        return [classes[i:i+num_classes] for i in range(0, len(classes), num_classes)]
+        return [classes[i:i + num_classes] for i in range(0, len(classes), num_classes)]
     return classes
+
 
 def expand_perm(perm_id, n_iters, num_classes, total_classes):
     if n_iters > len(perm_id):
@@ -345,6 +341,7 @@ def expand_perm(perm_id, n_iters, num_classes, total_classes):
 
     return perm_id
 
+
 def get_datasets(args, num_classes, all_classes):
     train_set = iCIFAR100(args, root="./data",
                           train=True,
@@ -376,33 +373,46 @@ def get_datasets(args, num_classes, all_classes):
     return train_set, test_set, train_fc_set, test_all_set
 
 
-if args.resume:
-    print("resuming model from %s-model.pth.tar" %
-          os.path.splitext(args.outfile)[0])
+print("resuming model from %s-model.pth.tar" %
+      os.path.splitext(args.outfile)[0])
 
-    model = torch.load("%s-model.pth.tar" % os.path.splitext(args.outfile)[0],
-                       map_location=lambda storage, loc: storage)
-    model.device = train_device
+model = torch.load("%s-model.pth.tar" % os.path.splitext(args.outfile)[0],
+                   map_location=lambda storage, loc: storage)
+model.device = train_device
 
-    model.exemplar_means = []
-    model.compute_means = True
+model.exemplar_means = []
+model.compute_means = True
 
-    info_coverage = np.load("%s-coverage.npz" \
-                            % os.path.splitext(args.outfile)[0])
+info_coverage = np.load("%s-coverage.npz" \
+                        % os.path.splitext(args.outfile)[0])
+info_matr = None
+if os.path.exists("%s-matr.npz" % os.path.splitext(args.outfile)[0]):
     info_matr = np.load("%s-matr.npz" % os.path.splitext(args.outfile)[0])
-    if expt_githash != info_coverage["expt_githash"]:
-        print("Warning : Code was changed since the last time model was saved")
-        print("Last commit hash : ", info_coverage["expt_githash"])
-        print("Current commit hash : ", expt_githash)
 
-    copy_args = ['init_lr', 'init_lr_ft', 'num_epoch', 'lrd', 'wd', 'batch_size', 'llr_freq', 'lexp_len',
-                 'num_exemplars', 'total_classes', 'num_classes', 'fix_explr', 'mix_class', 'sample']
-    copy_metric_args = ['batch_size_ft_fc', 'ft_fc_lr', 'ft_fc_epochs', 'corr_model_type', 'corr_model_incr',
-                        'corr_model_batch', 'corr_feature_idx', 'feat_vis_layer_name']
+if expt_githash != info_coverage["expt_githash"]:
+    print("Warning : Code was changed since the last time model was saved")
+    print("Last commit hash : ", info_coverage["expt_githash"])
+    print("Current commit hash : ", expt_githash)
 
-    perm_id = info_coverage["perm_id"]
-    num_iters_done = model.num_iters_done
+copy_args = ['init_lr', 'init_lr_ft', 'num_epoch', 'lrd', 'wd', 'batch_size', 'llr_freq', 'lexp_len',
+             'num_exemplars', 'total_classes', 'num_classes', 'fix_explr', 'mix_class', 'sample']
+copy_metric_args = ['batch_size_ft_fc', 'ft_fc_lr', 'ft_fc_epochs', 'corr_model_type', 'corr_model_incr',
+                    'corr_model_batch', 'corr_feature_idx', 'feat_vis_layer_name']
+
+copy_vals = [model.init_lr, model.init_lr_ft, model.num_epoch, model.lr_dec_factor, model.weight_decay,
+             model.batch_size, model.llr_freq, None, model.num_explrs, model.fc.out_features,
+             info_coverage['classes_seen'].shape[1] if len(info_coverage['classes_seen'].shape) > 1 else 1,
+             model.exemplar_sets[0].shape[0] == model.num_explrs, None, model.sample]
+
+
+perm_id = info_coverage["perm_id"]
+num_iters_done = model.num_iters_done
+
+if info_matr is not None:
     old_args = info_matr["args"].item()
+
+    if not hasattr(old_args, 'mix_class'):
+        old_args.mix_class = False
 
     # copy args that the learning dynamics are dependent on
     for arg in copy_args:
@@ -412,87 +422,93 @@ if args.resume:
     if args.resume_testing:
         for arg in copy_metric_args:
             setattr(args, arg, getattr(old_args, arg))
+else:
+    for arg, val in zip(copy_args, copy_vals):
+        if val is None:
+            continue
+        setattr(args, arg, val)
 
-    if args.resume_outfile is None:
-        args.resume_outfile = '%s-cont.csv' % args.outfile.split('.')[0]
-    temp = args.outfile
-    args.outfile = args.resume_outfile
-    args.resume_outfile = temp
+K = args.num_exemplars  # total number of exemplars
 
-    model_classes_seen = list(
-        info_coverage["model_classes_seen"][:num_iters_done])
-    classes_seen = list(info_coverage["classes_seen"][:num_iters_done])
+if args.resume_outfile is None:
+    args.resume_outfile = '%s-cont.csv' % args.outfile.split('.')[0]
+temp = args.outfile
+args.outfile = args.resume_outfile
+args.resume_outfile = temp
 
-    total_classes = args.total_classes
-    num_classes = args.num_classes
-    if not args.mix_class:
-        assert total_classes % num_classes == 0
+model_classes_seen = list(
+    info_coverage["model_classes_seen"][:num_iters_done])
+classes_seen = list(info_coverage["classes_seen"][:num_iters_done])
 
-    # get corr_model
-    corr_model = get_corr_model(args)
-
-    # make perm
-    perm_id = np.array(list(set(classes_seen)))
-    all_classes = list(perm_id)
-    if not args.mix_class:
-        perm_id = group_classes(list(perm_id), num_classes)
-
-    # make datasets
-    train_set, test_set, train_fc_set, test_all_set = get_datasets(args, num_classes, all_classes)
-
-    total_iters = num_iters_done + args.num_iters
-    acc_matr = np.zeros((total_classes, total_iters))
-    if args.ft_fc:
-        acc_matr_fc = np.zeros_like(acc_matr)
-    coverage = np.zeros((total_classes, total_iters))
-    n_known = np.zeros(total_iters, dtype=np.int32)
-
-    train_set.all_train_coverage[:, :num_iters_done] = info_coverage["train_coverage"]
-    coverage[:, :num_iters_done] = info_coverage["coverage"]
-    acc_matr[:, :num_iters_done] = info_matr['acc_matr']
-
-    train_counter = mp.Value("i", num_iters_done)
-    test_counter = mp.Value("i", num_iters_done)
-
-    # expanding test set to everything seen earlier
-    for mdl_cl, gt_cl in zip(model_classes_seen, classes_seen):
-        """
-        # expanding test set to everything seen earlier
-        for i, (mdl_cl, gt_cl) in enumerate(zip(model_classes_seen, classes_seen)):
-            if mdl_cl not in model_classes_seen[:i]:
-        """
-        print("Expanding class for resuming : %d, %d" % (mdl_cl, gt_cl))
-        test_set.expand([mdl_cl], [gt_cl])
-
-    # Ensuring requires_grad = True after model reload
-    for p in model.parameters():
-        p.requires_grad = True
-
-corr_model = get_corr_model(args)
-
+total_classes = args.total_classes
+num_classes = args.num_classes
 if not args.mix_class:
     assert total_classes % num_classes == 0
 
-# Randomly choose a subset of classes
-if args.subset and args.d_order:
-    perm_id = np.random.choice(100, total_classes, replace=False)
-    perm_id = np.random.permutation(perm_id)
-elif args.d_order:
-    perm_id = np.random.permutation(total_classes)
-else:
-    perm_id = np.arange(total_classes)
+# get corr_model
+corr_model = get_corr_model(args)
 
+# make perm
+perm_id = np.array(list(set([c[0] for c in classes_seen])))
 all_classes = list(perm_id)
 if not args.mix_class:
     perm_id = group_classes(list(perm_id), num_classes)
-
 print("perm_id:", perm_id)
 
-
+perm_id_old = info_coverage['perm_id']
 perm_id = expand_perm(perm_id, args.num_iters, num_classes, total_classes)
+perm_id = list(perm_id_old) + perm_id
 
 
+# make datasets
 train_set, test_set, train_fc_set, test_all_set = get_datasets(args, num_classes, all_classes)
+
+total_iters = num_iters_done + args.num_iters
+acc_matr = np.zeros((total_classes, total_iters))
+if args.ft_fc:
+    acc_matr_fc = np.zeros_like(acc_matr)
+coverage = np.zeros((total_classes, total_iters))
+n_known = np.zeros(total_iters, dtype=np.int32)
+
+train_set.all_train_coverage = info_coverage["train_coverage"]
+coverage[:, :num_iters_done] = info_coverage["coverage"]
+if info_matr is not None:
+    acc_matr[:, :num_iters_done] = info_matr['acc_matr']
+
+train_counter = mp.Value("i", num_iters_done)
+test_counter = mp.Value("i", num_iters_done)
+
+# expanding test set to everything seen earlier
+expanded = set()
+for mdl_cl, gt_cl in zip(model_classes_seen, classes_seen):
+    if len(expanded) >= total_classes:
+        break
+    """
+    # expanding test set to everything seen earlier
+    for i, (mdl_cl, gt_cl) in enumerate(zip(model_classes_seen, classes_seen)):
+        if mdl_cl not in model_classes_seen[:i]:
+    """
+    for mdl_cl_, gt_cl_ in zip(mdl_cl, gt_cl):
+        if gt_cl_ in expanded:
+            continue
+        print("Expanding class for resuming : %d, %d" % (mdl_cl_, gt_cl_))
+        test_set.expand([mdl_cl_], [gt_cl_])
+        expanded = expanded.union({gt_cl_})
+
+model_ = model
+model = IncrNet(args, train_device, cifar=True)
+model.num_iters_done = model_.num_iters_done
+model.fc = torch.nn.Linear(model_.fc.in_features, model_.fc.out_features, bias=False)
+model.model.fc = model.fc
+model.load_state_dict(model_.state_dict())
+for attr in ['n_known', 'n_classes', 'n_occurrences', 'exemplar_sets', 'eset_le_maps', 'exemplar_means',
+             'exposure_stats', 'classes', 'classes_map']:
+    setattr(model, attr, getattr(model_, attr))
+
+# Ensuring requires_grad = True after model reload
+for p in model.parameters():
+    p.requires_grad = True
+
 
 # set up running feature tracking
 if args.probe:
@@ -508,27 +524,16 @@ vc_module_name = args.feat_vis_layer_name[-1]
 
 print(len(train_set))
 print(num_classes)
-acc_matr = np.zeros((total_classes, num_iters))
-if args.ft_fc:
-    acc_matr_fc = np.zeros_like(acc_matr)
-coverage = np.zeros((total_classes, num_iters))
-n_known = np.zeros(num_iters, dtype=np.int32)
 
-classes_seen = []
-model_classes_seen = []  # Class index numbers stored by model
 exemplar_data = []  # Exemplar set information stored by th
 # acc_matr row index represents class number and column index represents
 # learning exposure.
-acc_matr = np.zeros((args.total_classes, args.num_iters))
 
 # Conditional variable, shared memory for synchronization
 cond_var = mp.Condition()
-train_counter = mp.Value("i", 0)
-test_counter = mp.Value("i", 0)
 dataQueue = mp.Queue()
 all_done = mp.Event()
 data_mgr = mp.Manager()
-
 
 expanded_classes = data_mgr.list([None for i in range(args.test_freq)])
 
@@ -539,6 +544,7 @@ if args.ft_fc:
 if args.feat_corr:
     save_data += ['Feat_match_correlation', 'Correlation_time']
 writer = CSVWriter(args.outfile, *save_data)
+
 
 def train_run(device):
     global train_set
@@ -552,7 +558,7 @@ def train_run(device):
 
     running_activations = {}
 
-    while s < args.num_iters:
+    while s < total_iters:
         if s == 0:
             cond_var.acquire()
             train_counter.value += 1
@@ -609,7 +615,7 @@ def train_run(device):
         model_classes_seen.append(model_curr_class_idx)
 
         # Load Datasets
-        print("Loading training examples for"\
+        print("Loading training examples for" \
               " class indexes (%s), (%s), at iteration %d" %
               (', '.join(map(lambda x: str(x), model_curr_class_idx)), ', '.join(map(lambda x: str(x), curr_class)), s))
         train_set.load_data_class(curr_class, model_curr_class_idx, s)
@@ -632,8 +638,8 @@ def train_run(device):
               (', '.join(map(lambda x: str(x), model_curr_class_idx)), ', '.join(map(lambda x: str(x), curr_class))),
               end="")
         images, le_maps = train_set.get_image_classes(
-                model_curr_class_idx)
-        mean_images = np.array([mean_image]*len(images[0]))
+            model_curr_class_idx)
+        mean_images = np.array([mean_image] * len(images[0]))
         model.construct_exemplar_sets(images,
                                       mean_images,
                                       le_maps, None, m,
@@ -644,11 +650,11 @@ def train_run(device):
         print("Model num classes : %d, " % model.n_known)
 
         if s > 0:
-            coverage[:,s] = coverage[:,s-1]
-        coverage[model_curr_class_idx,s] = \
-                            train_set.get_train_coverages(perm_id[s])
+            coverage[:, s] = coverage[:, s - 1]
+        coverage[model_curr_class_idx, s] = \
+            train_set.get_train_coverages(perm_id[s])
         print("Coverage of current classes now: %s" %
-                    ', '.join(map(lambda x: str(x), coverage[model_curr_class_idx,s])))
+              ', '.join(map(lambda x: str(x), coverage[model_curr_class_idx, s])))
 
         for y, P_y in enumerate(model.exemplar_sets):
             print("Exemplar set for class-%d:" % (y), P_y.shape)
@@ -673,8 +679,6 @@ def train_run(device):
         cond_var.notify_all()
         cond_var.release()
 
-            
-            
         np.savez(args.outfile[:-4] + "-coverage.npz", \
                  coverage=coverage, \
                  perm_id=perm_id, n_known=n_known, \
@@ -697,7 +701,7 @@ def test_run(device):
     corr_model_ = corr_model
     print("####### Test Process Running ########")
     test_model = None
-    s = args.test_freq * (len(classes_seen)//args.test_freq)
+    s = args.test_freq * (len(classes_seen) // args.test_freq)
 
     # Initialize VC Dataset
     # TODO should we use transform?
@@ -706,7 +710,8 @@ def test_run(device):
     if args.track_vc:
         assert corr_model is not None, 'No corr_model specified for Visual Concept identification'
         vc_dataset = get_vc_dataset(args, corr_model, args.feat_vis_layer_name[-1], all_classes,
-                                    root='./data', train=True, transform=transform, mean_image=mean_image, download=False)
+                                    root='./data', train=True, transform=transform, mean_image=mean_image,
+                                    download=False)
         vc_writer = CSVWriter(vc_save_file + '.csv', 'Iteration', *(str(idx) for idx in vc_dataset.kept_idxs))
         writers += [vc_writer]
 
@@ -714,7 +719,7 @@ def test_run(device):
 
     test_wait_time = 0
     with ContextMerger(*writers):
-        while s < args.num_iters:
+        while s < total_iters:
 
             # Wait till training is done
             time_ptr = time.time()
@@ -751,7 +756,6 @@ def test_run(device):
                     test_set.expand(model_cl, gt_cl)
 
             print("[Test Process] Test Set Length:", len(test_set))
-
 
             test_model.device = device
             test_model.cuda(device=device)
@@ -801,7 +805,7 @@ def test_run(device):
                     correct = np.sum(class_preds == i)
                     total = len(class_preds)
 
-                    acc_matr[i, s] = (100.0 * correct/total)
+                    acc_matr[i, s] = (100.0 * correct / total)
 
                 test_acc = np.mean(acc_matr[:test_model.n_known, s])
 
@@ -810,9 +814,8 @@ def test_run(device):
                 writer.write(Test_accuracy=test_acc, Test_time=test_time)
 
                 print('[Test Process] =======> Test Accuracy after %d'
-                  ' learning exposures : ' %
-                  (s + args.test_freq), test_acc)
-
+                      ' learning exposures : ' %
+                      (s + args.test_freq), test_acc)
 
                 print("[Test Process] Saving model and other data")
                 test_model.cpu()
@@ -822,7 +825,7 @@ def test_run(device):
                                os.path.splitext(args.outfile)[0])
                 else:
                     torch.save(test_model, "%s/model_iter_%d.pth.tar"
-                                            % (args.save_all_dir, s))
+                               % (args.save_all_dir, s))
 
                 # add nodes for unseen classes to output layer
                 test_model.increment_classes([c for c in all_classes if c not in test_model.classes_map])
