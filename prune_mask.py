@@ -377,7 +377,7 @@ def main():
     xs = [i for i in range(0, total_iter, test_freq)]
     xticks = [i for i in range(0, total_iter, 500)]
 
-    # sns.set()
+    sns.set()
     # sns.set_palette("deep")
     # plt.plot(xs, accs, label="accuracy")
     # plt.plot(xs, recs, label="recall")
