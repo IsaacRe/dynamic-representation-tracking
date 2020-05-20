@@ -269,22 +269,26 @@ def get_recall(gt, mask):
 def get_avg_acc(md1, md2):
     assert(md1.keys() == md2.keys())
     sum_acc = 0
+    num_params = 0
     for key in md1.keys():
         mask1 = md1[key]
         mask2 = md2[key]
-        sum_acc += get_sad_acc(mask1, mask2, key)
+        num_params += len(mask1)
+        sum_acc += get_sad_acc(mask1, mask2, key) * len(mask1)
 
-    return (sum_acc / len(md1)) * 100
+    return (sum_acc / num_params) * 100
 
 def get_avg_recall(gt_md, md):
     assert(gt_md.keys() == md.keys())
     sum_rec = 0
+    num_params = 0
     for key in gt_md.keys():
         gt = gt_md[key]
         mask = md[key]
-        sum_rec += get_recall(gt, mask)
+        num_params += len(mask)
+        sum_rec += get_recall(gt, mask) * len(mask)
 
-    return (sum_rec / len(gt_md)) * 100
+    return (sum_rec / num_params) * 100
 
 def prune_mask(i, percent, mod=None):
     mask_dicts = {}
@@ -316,12 +320,12 @@ def store_prune_mask(i, percent, save_all_dir):
     # with open("%s/model_iter_%d.pkl" % (save_all_dir, i), "wb") as f:
         # pickle.dump(mask_dicts, f, pickle.HIGHEST_PROTOCOL)
 
-def total_data(percent):
-    final_md = prune_mask(1990, percent)
+def total_data(percent, total=5000, freq=10):
+    final_md = prune_mask(total-freq, percent)
     accs = []
     recs = []
 
-    for i in range(0, 2000, 10):
+    for i in range(0, total, freq):
         md = prune_mask(i, percent)
         acc = get_avg_acc(final_md, md)
         rec = get_avg_recall(final_md, md)
@@ -330,37 +334,75 @@ def total_data(percent):
 
     return accs, recs
 
+def get_metric(prev, curr, final):
+    m1 = 0
+    m2 = 0
+    total_params = 0
+
+    for key in prev.keys():
+        prev_mask = prev[key]
+        curr_mask = curr[key]
+        final_mask = final[key]
+
+        diffs = prev_mask != curr_mask
+        m1 += np.sum(diffs)
+        m2 += np.sum(curr_mask[diffs] == final_mask[diffs])
+        total_params += len(prev_mask)
+
+    return (m1 / total_params) * 100, (m2 / m1) * 100
+
+
+def get_metrics_total(percent, total=5000, freq=10):
+    last = total - freq
+    final_md = prune_mask(last, percent)
+
+    m1s = []
+    m2s = []
+
+    prev = prune_mask(0, percent)
+    for i in range(freq, total, freq):
+        curr = prune_mask(i, percent)
+        m1, m2 = get_metric(prev, curr, final_md)
+        m1s.append(m1)
+        m2s.append(m2)
+
+    return m1s, m2s
+
 def main():
-    accs, recs = total_data(80)
-    xs = [i for i in range(0, 2000, 10)]
-    xticks = [i for i in range(0, 2000, 100)]
+    percent = 80
+    total_iter = 5000
+    test_freq = 10
+    # accs, recs = total_data(percent)
+    m1s, m2s = get_metrics_total(percent)
+    xs = [i for i in range(0, total_iter, test_freq)]
+    xticks = [i for i in range(0, total_iter, 500)]
 
     sns.set()
-    sns.set_palette("deep")
-    plt.plot(xs, accs, label="accuracy")
-    plt.plot(xs, recs, label="recall")
-    plt.xlabel("Iterations")
-    plt.ylabel("Percentage")
-    plt.xticks(xticks)
-    plt.legend()
-    plt.savefig("prune.png")
-    # fig, (ax1, ax2) = plt.subplots(2)
-    # fig.suptitle("Prune Accuracy and Recall vs Iterations")
-    # ax1.plot(xs, accs, label="accuracy")
-    # ax2.plot(xs, recs, label="recall")
-    # ax2.set_xlabel("Iterations")
+    # sns.set_palette("deep")
+    # plt.plot(xs, accs, label="accuracy")
+    # plt.plot(xs, recs, label="recall")
+    # plt.xlabel("Iterations")
+    # plt.ylabel("Percentage")
+    # plt.xticks(xticks)
+    # plt.legend()
+    # plt.savefig("prune.png")
+    fig, (ax1, ax2) = plt.subplots(1, 2)
+    fig.suptitle("Prune Accuracy and Recall vs Iterations")
+    ax1.plot(xs, m1s, label="Metric 1")
+    ax2.plot(xs, m2s, label="Metric 2")
+    ax2.set_xlabel("Iterations")
 
-    # ax2.set_xticks(xticks)
-    # ax2.set_xticklabels(xticks, rotation=50, ha="right")
-    # ax1.set_xticks(xticks)
-    # ax1.set_xticklabels(xticks, rotation=50, ha="right")
+    ax2.set_xticks(xticks)
+    ax2.set_xticklabels(xticks, rotation=50, ha="right")
+    ax1.set_xticks(xticks)
+    ax1.set_xticklabels(xticks, rotation=50, ha="right")
 
-    # ax1.set_ylabel("Accuracy")
-    # ax2.set_ylabel("Recall")
+    ax1.set_ylabel("Metric 1")
+    ax2.set_ylabel("Metric 2")
     # ax1.legend()
     # ax2.legend()
     # fig.show()
-    # fig.savefig("prune.png")
+    fig.savefig("prune.png")
 
 if __name__ == "__main__":
     main()
