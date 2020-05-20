@@ -365,8 +365,15 @@ def test_run(device):
         assert corr_model is not None, 'No corr_model specified for Visual Concept identification'
         vc_dataset = get_vc_dataset(args, corr_model, args.feat_vis_layer_name[-1], all_classes,
                                     root='./data', train=True, transform=transform, mean_image=mean_image, download=False)
+        vc_dataset_test = get_vc_dataset(args, corr_model, args.feat_vis_layer_name[-1], all_classes,
+                                         root='./data', train=False, transform=None, mean_image=mean_image)
+        #acc, w = test_vc_accuracy(args, corr_model, args.feat_vis_layer_name[-1], vc_dataset, vc_dataset_test, device=device,
+        #                          uniform_init=True, epochs=10)
+
         vc_writer = CSVWriter(vc_save_file + '.csv', 'Iteration', *(str(idx) for idx in vc_dataset.kept_idxs))
         writers += [vc_writer]
+        if vc_dataset_test.sorted_filters is not None:
+            np.save('%s-sorted_filters.npy' % args.outfile.split('.')[0], vc_dataset_test.sorted_filters)
 
     vc_weights = []
 
@@ -471,7 +478,8 @@ def test_run(device):
 
             if args.track_vc:
                 print('[Test Process] Testing accuracy over visual concepts...')
-                vc_acc_, vc_weight = test_vc_accuracy(args, test_model.model, vc_module_name, vc_dataset, device=device)
+                vc_acc_, vc_weight = test_vc_accuracy(args, test_model.model, vc_module_name, vc_dataset,
+                                                      vc_dataset_test, device=device, train=False)
                 vc_acc = {str(idx): acc for idx, acc in zip(vc_dataset.kept_idxs, vc_acc_)}
                 vc_writer.write(Iteration=s, **vc_acc)
                 vc_weights += [vc_weight]
