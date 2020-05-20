@@ -373,7 +373,7 @@ def main():
     total_iter = 5000
     test_freq = 10
     # accs, recs = total_data(percent)
-    m1s, m2s = total_data(percent)
+    m1s, m2s = get_metrics_total(percent)
     xs = [i for i in range(0, total_iter, test_freq)]
     xticks = [i for i in range(0, total_iter, 500)]
 
@@ -386,7 +386,7 @@ def main():
     # plt.xticks(xticks)
     # plt.legend()
     # plt.savefig("prune.png")
-    fig, (ax1, ax2) = plt.subplots(2)
+    fig, (ax1, ax2) = plt.subplots(1, 2)
     fig.suptitle("Prune Accuracy and Recall vs Iterations")
     ax1.plot(xs, m1s, label="Metric 1")
     ax2.plot(xs, m2s, label="Metric 2")
