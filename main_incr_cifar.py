@@ -922,14 +922,14 @@ def test_run(device):
                 np.save('%s-fc-matr.npz' % os.path.splitext(args.outfile)[0],
                         acc_matr_fc)
 
-                np.savez('%s-matr.npz' % os.path.splitext(args.outfile)[0],
-                         acc_matr=acc_matr,
-                         model_hyper_params=model.fetch_hyper_params(),
-                         args=args, num_iters_done=s)
-
                 # Track ft-fc runtime (in eons lmao)
                 ftfc_time = time.time() - start_time
                 writer.write(FTFC_accuracy=test_acc, FTFC_time=ftfc_time)
+
+            np.savez('%s-matr.npz' % os.path.splitext(args.outfile)[0],
+                     acc_matr=acc_matr,
+                     model_hyper_params=model.fetch_hyper_params(),
+                     args=args, num_iters_done=s)
 
             # loop var increment
             s += args.test_freq
