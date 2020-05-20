@@ -335,11 +335,21 @@ def total_data(percent, total=5000, freq=10):
     return accs, recs
 
 def get_metric(prev, curr, final):
-    m1 = 1 - get_avg_acc(prev, curr)
+    m1 = 0
+    m2 = 0
+    total_params = 0
 
-    m2 = 0 # TODO: complete
+    for key in prev.keys():
+        prev_mask = prev[key]
+        curr_mask = curr[key]
+        final_mask = final[key]
 
-    return m1, m2
+        diffs = prev_mask != curr_mask
+        m1 += np.sum(diffs)
+        m2 += np.sum(curr_mask[diffs] == final_mask[diffs])
+        total_params += len(prev_mask)
+
+    return (m1 / total_params) * 100, (m2 / m1) * 100
 
 
 def get_metrics_total(percent, total=5000, freq=10):
@@ -362,36 +372,37 @@ def main():
     percent = 80
     total_iter = 5000
     test_freq = 10
-    accs, recs = total_data(percent)
+    # accs, recs = total_data(percent)
+    m1s, m2s = total_data(percent)
     xs = [i for i in range(0, total_iter, test_freq)]
     xticks = [i for i in range(0, total_iter, 500)]
 
-    sns.set()
-    sns.set_palette("deep")
-    plt.plot(xs, accs, label="accuracy")
-    plt.plot(xs, recs, label="recall")
-    plt.xlabel("Iterations")
-    plt.ylabel("Percentage")
-    plt.xticks(xticks)
-    plt.legend()
-    plt.savefig("prune.png")
-    # fig, (ax1, ax2) = plt.subplots(2)
-    # fig.suptitle("Prune Accuracy and Recall vs Iterations")
-    # ax1.plot(xs, accs, label="accuracy")
-    # ax2.plot(xs, recs, label="recall")
-    # ax2.set_xlabel("Iterations")
+    # sns.set()
+    # sns.set_palette("deep")
+    # plt.plot(xs, accs, label="accuracy")
+    # plt.plot(xs, recs, label="recall")
+    # plt.xlabel("Iterations")
+    # plt.ylabel("Percentage")
+    # plt.xticks(xticks)
+    # plt.legend()
+    # plt.savefig("prune.png")
+    fig, (ax1, ax2) = plt.subplots(2)
+    fig.suptitle("Prune Accuracy and Recall vs Iterations")
+    ax1.plot(xs, m1s, label="Metric 1")
+    ax2.plot(xs, m2s, label="Metric 2")
+    ax2.set_xlabel("Iterations")
 
-    # ax2.set_xticks(xticks)
-    # ax2.set_xticklabels(xticks, rotation=50, ha="right")
-    # ax1.set_xticks(xticks)
-    # ax1.set_xticklabels(xticks, rotation=50, ha="right")
+    ax2.set_xticks(xticks)
+    ax2.set_xticklabels(xticks, rotation=50, ha="right")
+    ax1.set_xticks(xticks)
+    ax1.set_xticklabels(xticks, rotation=50, ha="right")
 
-    # ax1.set_ylabel("Accuracy")
-    # ax2.set_ylabel("Recall")
+    ax1.set_ylabel("Metric 1")
+    ax2.set_ylabel("Metric 2")
     # ax1.legend()
     # ax2.legend()
     # fig.show()
-    # fig.savefig("prune.png")
+    fig.savefig("prune.png")
 
 if __name__ == "__main__":
     main()
