@@ -76,42 +76,56 @@ def test_vc_accuracy_v1(args, network, module_name, vc_dset, device=0, classific
     return correct / total * 100., classification_layer.conv1x1.weight.data.cpu()[:, :, 0, 0]
 
 
-def train_classification_layer(args, network, module_name, vc_dset, device=0, act_tracker=None):
+def train_classification_layer(args, network, module_name, vc_dset, device=0, act_tracker=None,
+                               uniform_init=False, epochs=1):
     if act_tracker is None:
         act_tracker = ActivationTracker(module_names=[module_name], network=network, store_on_gpu=True)
     in_dim = act_tracker.modules[module_name].out_channels
-    classification_layer = VCLogitLayer(in_dim, vc_dset.kept_idxs).to(device)
+    if not uniform_init:
+        classification_layer = VCLogitLayer(in_dim, vc_dset.kept_idxs).to(device)
+    else:
+        classification_layer = VCLogitLayer(in_dim, vc_dset.kept_idxs, uniform_init=1 / 512).to(device)
     bce = torch.nn.BCEWithLogitsLoss(reduction='none')
     filter_weights = None
     weights = None
     optim = torch.optim.SGD(classification_layer.parameters(), lr=args.lr_vc)
-    for i, img, vc_lbl in tqdm(vc_dset.get_loader(args.batch_size_train_vc)):
-        if filter_weights is None:
-            filter_weights = vc_dset.filter_weights[None, :, None, None].repeat(vc_lbl.shape[0], 1,
-                                                                                *vc_lbl.shape[2:]).to(device)
-            weights = torch.ones_like(filter_weights).to(device)
-        img, vc_lbl = img.to(device), vc_lbl.to(device)
-        with act_tracker.track_all_context():
-            network(img)
-            activations = act_tracker.get_module_activations(module_name, cpu=False)
-        out = classification_layer(activations)
-        loss = bce(out, vc_lbl)  # only use valid localities in framing loss
-        weights[:] = 1.0
-        weights[vc_lbl == 1.0] = filter_weights[vc_lbl == 1.0]
-        loss = (loss * weights).mean()
-        loss.backward()
-        optim.step()
-        optim.zero_grad()
+    test_loader = vc_dset.get_loader(args.batch_size_train_vc)
+    pbar = tqdm(total=epochs * len(test_loader))
+    for e in range(epochs):
+        for i, img, vc_lbl in test_loader:
+            if filter_weights is None:
+                filter_weights = vc_dset.filter_weights[None, :, None, None].repeat(vc_lbl.shape[0], 1,
+                                                                                    *vc_lbl.shape[2:]).to(device)
+                weights = torch.ones_like(filter_weights).to(device)
+            img, vc_lbl = img.to(device), vc_lbl.to(device)
+            with act_tracker.track_all_context():
+                network(img)
+                activations = act_tracker.get_module_activations(module_name, cpu=False)
+            out = classification_layer(activations)
+            loss = bce(out, vc_lbl)  # only use valid localities in framing loss
+            weights[:] = 1.0
+            weights[vc_lbl == 1.0] = filter_weights[vc_lbl == 1.0]
+            loss = (loss * weights).mean()
+            loss.backward()
+            optim.step()
+            optim.zero_grad()
+            pbar.update(1)
+    pbar.close()
 
     return classification_layer
 
 
-def test_vc_accuracy(args, network, module_name, vc_dset, device=0, classification_layer=None, act_tracker=None):
+def test_vc_accuracy(args, network, module_name, vc_dset_train, vc_dset, device=0, classification_layer=None,
+                     act_tracker=None, uniform_init=False, epochs=1, train=True):
     if act_tracker is None:
         act_tracker = ActivationTracker(module_names=[module_name], network=network, store_on_gpu=True)
     if classification_layer is None:
-        classification_layer = train_classification_layer(args, network, module_name, vc_dset,
-                                                          device=device, act_tracker=act_tracker)
+        if train:
+            classification_layer = train_classification_layer(args, network, module_name, vc_dset_train,
+                                                          device=device, act_tracker=act_tracker,
+                                                          uniform_init=uniform_init, epochs=epochs)
+        else:
+            classification_layer = VCLogitLayer(512, range(512)).cuda(device)
 
     total = np.zeros((vc_dset.total_classes,))
     correct = np.zeros((vc_dset.total_classes,))
@@ -136,11 +150,12 @@ def _define_VisualConceptDataset(base_dataset):
 
         def __init__(self, args, network, module_name, *dset_args, batch_size=100, device=0, store_on_gpu=False,
                      version='2.0', **dset_kwargs):
-            super(VisualConceptDataset, self).__init__(*dset_args, **dset_kwargs)
+            super(VisualConceptDataset, self).__init__(*dset_args, **dset_kwargs, crop=False)
             self.labeler = VCLabeler(args, network, module_name, device=device, store_on_gpu=store_on_gpu)
             self.valid_localities = None
             self.filter_weights = None
             self._prune_mask = None
+            self.sorted_filters = None
 
             if version == '2.0':
                 if hasattr(self, 'train_labels'):
@@ -185,7 +200,9 @@ def _define_VisualConceptDataset(base_dataset):
         @property
         def kept_idxs(self):
             if self._prune_mask is None:
-                return np.arange(self.train_labels.shape[1])
+                if self.train:
+                    return np.arange(self.train_labels.shape[1])
+                return np.arange(self.test_labels.shape[1])
             return np.where(~self._prune_mask)[0]
 
         @property
@@ -206,14 +223,18 @@ class NullVisualConceptDataset:
 
 class VCLogitLayer(torch.nn.Module):
 
-    def __init__(self, in_dim, vc_idxs, threshold_estimate=1.0):
+    def __init__(self, in_dim, vc_idxs, threshold_estimate=0.5, uniform_init=None):
         super(VCLogitLayer, self).__init__()
         self.conv1x1 = torch.nn.Conv2d(in_channels=in_dim, out_channels=len(vc_idxs), kernel_size=1)
 
-        # initialize layer weights with best guess under assumption that activations never change
-        self.conv1x1.weight.data.zero_()
-        for i, idx in enumerate(vc_idxs):
-            self.conv1x1.weight.data[i, idx, :, :] = 1.0
+        if uniform_init is None:
+            # initialize layer weights with best guess under assumption that activations never change
+            self.conv1x1.weight.data.zero_()
+            for i, idx in enumerate(vc_idxs):
+                self.conv1x1.weight.data[i, idx, :, :] = 1.0
+        else:
+            self.conv1x1.weight.data.fill_(uniform_init)
+
         self.conv1x1.bias.data[:] = -threshold_estimate
 
     def forward(self, x):
