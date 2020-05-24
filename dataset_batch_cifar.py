@@ -69,8 +69,9 @@ class CIFAR20(CIFAR100):
         if self.train:
             img = self.train_data[index]
             img = Image.fromarray(np.uint8(img))
-            img = np.array(self.transform(img))
-            img = img.transpose(2,0,1)
+            if self.transform is not None:
+                img = self.transform(img)
+            img = np.array(img).transpose(2,0,1)
 
             if self.mean_image is not None:
                 img = (img - self.mean_image)/255.

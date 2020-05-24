@@ -23,8 +23,8 @@ def set_base_dataset(dataset_name):
     VisualConceptDataset = _define_VisualConceptDataset(dataset)
 
 
-def get_vc_dataset(args, model, layer_name, *dset_args, device=0, **dset_kwargs):
-    vc_dset = VisualConceptDataset(args, model, layer_name, *dset_args, device=device, **dset_kwargs)
+def get_vc_dataset(args, model, layer_name, *dset_args, device=0, balance=False, **dset_kwargs):
+    vc_dset = VisualConceptDataset(args, model, layer_name, *dset_args, device=device, balance=balance, **dset_kwargs)
 
     return vc_dset
 
@@ -50,12 +50,15 @@ def train_classification_layer_v1(args, network, module_name, vc_dset, device=0,
     return classification_layer
 
 
-def test_vc_accuracy_v1(args, network, module_name, vc_dset, device=0, classification_layer=None, act_tracker=None):
+def test_vc_accuracy_v1(args, network, module_name, vc_dset, device=0, classification_layer=None, act_tracker=None,
+                        recall=False):
     if act_tracker is None:
         act_tracker = ActivationTracker(module_names=[module_name], network=network, store_on_gpu=True)
     if classification_layer is None:
-        classification_layer = train_classification_layer(args, network, module_name, vc_dset,
-                                                          device=device, act_tracker=act_tracker)
+        #classification_layer = train_classification_layer(args, network, module_name, vc_dset,
+        #                                                  device=device, act_tracker=act_tracker)
+        in_dim = act_tracker.modules[module_name].out_channels
+        classification_layer = VCLogitLayer(in_dim, vc_dset.kept_idxs, args.present_vc_threshold).to(device)
 
     total = np.zeros((vc_dset.total_classes,))
     correct = np.zeros((vc_dset.total_classes,))
@@ -67,11 +70,21 @@ def test_vc_accuracy_v1(args, network, module_name, vc_dset, device=0, classific
         out = classification_layer(activations)
         pred = torch.sigmoid(out).round()
         pred[~valid] = -1.  # only consider correct predictions among valid localities
-        correct_mask = (pred == vc_lbl).transpose(1, 0).flatten(start_dim=1, end_dim=3)
-        correct += correct_mask.sum(dim=1).cpu().numpy()
+        correct_mask = (pred == vc_lbl)
 
-        # Get total number of valid data points for each vc class
-        total += valid.transpose(1, 0).flatten(start_dim=1, end_dim=3).sum(dim=1).cpu().numpy()
+        if recall:
+            # Only care about correctly classified instances where the label is 1
+            correct += (correct_mask.type(torch.float) * vc_lbl).sum(dim=0).sum(dim=1).sum(dim=1).type(torch.int).cpu().numpy()
+
+            # Get total number of positive, valid data points
+            total_ = vc_lbl * valid.type(torch.float).to(device)
+            total_ = total_.sum(dim=0).sum(dim=1).sum(dim=1)
+            total += total_.type(torch.int).cpu().numpy()
+        else:
+            correct += correct_mask.sum(dim=0).sum(dim=1).sum(dim=1).cpu().numpy()
+
+            # Get total number of valid data points for each vc class
+            total += valid.transpose(1, 0).flatten(start_dim=1, end_dim=3).sum(dim=1).cpu().numpy()
 
     return correct / total * 100., classification_layer.conv1x1.weight.data.cpu()[:, :, 0, 0]
 
@@ -116,7 +129,7 @@ def train_classification_layer(args, network, module_name, vc_dset, device=0, ac
 
 
 def test_vc_accuracy(args, network, module_name, vc_dset_train, vc_dset, device=0, classification_layer=None,
-                     act_tracker=None, uniform_init=False, epochs=1, train=True):
+                     act_tracker=None, uniform_init=False, epochs=1, train=True, recall=False):
     if act_tracker is None:
         act_tracker = ActivationTracker(module_names=[module_name], network=network, store_on_gpu=True)
     if classification_layer is None:
@@ -136,11 +149,18 @@ def test_vc_accuracy(args, network, module_name, vc_dset_train, vc_dset, device=
             activations = act_tracker.get_module_activations(module_name, cpu=False)
         out = classification_layer(activations)
         pred = torch.sigmoid(out).round()
-        correct_mask = (pred == vc_lbl).transpose(1, 0).flatten(start_dim=1, end_dim=3)
-        correct += correct_mask.sum(dim=1).cpu().numpy()
+        correct_mask = (pred == vc_lbl)
+        if recall:
+            # Only care about correctly classified instances where the label is 1
+            correct += (correct_mask.type(torch.float) * vc_lbl).sum(dim=0).sum(dim=1).sum(dim=1).cpu().numpy()
 
-        # Get total number of valid data points for each vc class
-        total += np.array([vc_lbl.transpose(1, 0).flatten(start_dim=1, end_dim=3).shape[1]] * vc_dset.total_classes)
+            # Get total number of positive data points for each vc class
+            total += vc_lbl.sum(dim=0).sum(dim=1).sum(dim=1).cpu().numpy()
+        else:
+            correct += correct_mask.sum(dim=0).sum(dim=1).sum(dim=1).cpu().numpy()
+
+            # Get total number of data points for each vc class
+            total += np.array([vc_lbl.transpose(1, 0).flatten(start_dim=1, end_dim=3).shape[1]] * vc_dset.total_classes)
 
     return correct / total * 100., classification_layer.conv1x1.weight.data.cpu()[:, :, 0, 0]
 
@@ -149,7 +169,7 @@ def _define_VisualConceptDataset(base_dataset):
     class VisualConceptDataset(base_dataset):
 
         def __init__(self, args, network, module_name, *dset_args, batch_size=100, device=0, store_on_gpu=False,
-                     version='2.0', **dset_kwargs):
+                     version='2.0', balance=False, **dset_kwargs):
             super(VisualConceptDataset, self).__init__(*dset_args, **dset_kwargs, crop=False)
             self.labeler = VCLabeler(args, network, module_name, device=device, store_on_gpu=store_on_gpu)
             self.valid_localities = None
@@ -164,10 +184,11 @@ def _define_VisualConceptDataset(base_dataset):
                     assert hasattr(self, 'test_labels')
                     labels_attr = 'test_labels'
                 setattr(self, 'class_' + labels_attr, getattr(self, labels_attr))
-                labels, self.sorted_filters = self.labeler.label_data(self.get_loader(batch_size=batch_size,
-                                                                                      shuffle=True),
-                                                                      self.get_loader(batch_size=batch_size),
-                                                                      order_by_importance=True)
+                self._prune_mask, labels, self.valid_localities, self.sorted_filters = \
+                    self.labeler.label_data(self.get_loader(batch_size=batch_size, shuffle=True),
+                                            self.get_loader(batch_size=batch_size),
+                                            order_by_importance=True,
+                                            balance=balance)
                 self.total_classes = labels.shape[1]
                 setattr(self, labels_attr, labels)
 
@@ -192,6 +213,7 @@ def _define_VisualConceptDataset(base_dataset):
             i, img, lbl = super(VisualConceptDataset, self).__getitem__(item)
             if self.valid_localities is not None:
                 return i, img, self.valid_localities[item], lbl
+            # if vc data has not been initialized behave as inherited dataset
             return i, img, lbl
 
         def get_loader(self, batch_size=100, shuffle=False):
@@ -245,7 +267,9 @@ class VCLabeler:
 
     def __init__(self, args, network, module_name, store_on_gpu=False, device=0,
                  init_t=0.5, temperature=0.2, version='2.0'):
+        init_t = args.present_vc_threshold
         self.layer_name = module_name
+        self.init_t = init_t
         self.min_data_points = args.vc_dataset_size
         self.absent_threshold = args.absent_vc_threshold
         self.present_threshold = args.present_vc_threshold
@@ -285,15 +309,40 @@ class VCLabeler:
                                                  hook_manager=self.hook_manager)
 
     @staticmethod
-    def get_balanced_data_mask(present, absent, min_data_points):
+    def get_balanced_data_mask(present, absent, min_data_points, balance=True):
         num_filters = present.shape[1]
         min_per_bin_class = min_data_points // 2
 
+        num_p = present.sum(dim=0).sum(dim=1).sum(dim=1)
+        num_a = absent.sum(dim=0).sum(dim=1).sum(dim=1)
+
+        discard_filters = set(np.where(np.bitwise_or(num_a < min_per_bin_class, num_p < min_per_bin_class))[0])
+        kept_filters = np.where(np.bitwise_and(num_a >= min_per_bin_class, num_p >= min_per_bin_class))[0]
+
+        if not balance:
+            return present[:, kept_filters], None, discard_filters
+
+        select = torch.zeros_like(present).type(torch.bool)
+        for i in kept_filters:
+            p_select = select[:, i][present[:, i] == 1]
+            p_select[np.random.choice(int(num_p[i]), min_per_bin_class, replace=False)] = True
+            select[:, i][present[:, i] == 1] = p_select
+
+            a_select = select[:, i][absent[:, i] == 1]
+            a_select[np.random.choice(int(num_a[i]), min_per_bin_class, replace=False)] = True
+            select[:, i][absent[:, i] == 1] = a_select
+
+        return present[:, kept_filters], select[:, kept_filters], discard_filters
+
+
+
+
+
         p_samples = np.stack(np.where(present), axis=1)
-        p_filter_samples = [p_samples[p_samples[:, 1] == i] for i in range(num_filters)]
+        p_filter_samples = [p_samples[p_samples[:, 1] == i] for i in tqdm(range(num_filters))]
 
         n_samples = np.stack(np.where(absent), axis=1)
-        n_filter_samples = [n_samples[n_samples[:, 1] == i] for i in range(num_filters)]
+        n_filter_samples = [n_samples[n_samples[:, 1] == i] for i in tqdm(range(num_filters))]
 
         discard_filters = {i for i in range(num_filters) if
                            n_filter_samples[i].shape[0] < min_per_bin_class or
@@ -320,7 +369,7 @@ class VCLabeler:
 
         return present[:, kept_filter_idxs], select_samples[:, kept_filter_idxs], discard_filters
 
-    def label_data(self, *loaders, seed=0, order_by_importance=False):
+    def label_data(self, *loaders, seed=0, order_by_importance=False, balance=False):
         rand_state = np.random.get_state()
         np.random.seed(seed)
 
@@ -404,13 +453,23 @@ class VCLabeler:
                                                                                    output_raw=order_by_importance)
             labels = binary_activations
 
+            discard_filter_mask = None
+            if balance:
+                labels, select, discard_filters = self.get_balanced_data_mask(labels, -(labels - 1), 1000)
+            else:
+                labels, _, discard_filters = self.get_balanced_data_mask(labels, -(labels - 1), 1000)
+                select = torch.ones_like(labels).type(torch.bool)
+            if len(discard_filters) > 0:
+                discard_filter_mask = np.zeros(binary_activations.shape[1]).astype(np.bool_)
+                discard_filter_mask[(np.array(list(discard_filters)),)] = True
+
             # arrange VCs by filter importance
             sorted_filters = None
             if order_by_importance:
                 importances, sorted_importances = self.pruner.sort_filter_activations_by_metric(raw_activations)
                 sorted_filters = np.array([filter_idx for importance, filter_idx in sorted_importances])
 
-            return labels, sorted_filters
+            return discard_filter_mask, labels, select, sorted_filters
 
         else:
             loader, = loaders
