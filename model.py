@@ -31,8 +31,7 @@ class IncrNet(nn.Module):
         self.weight_decay = args.wd
         self.should_prune = args.should_prune
         self.save_all_dir = args.save_all_dir
-
-
+        self.mask_dict = None
 
         # Number of exemplars
         self.num_explrs = args.num_exemplars
@@ -517,6 +516,19 @@ class IncrNet(nn.Module):
                 'momentum': self.momentum,
                 'weight_decay': self.weight_decay}
 
+    def get_mask_dict(self):
+        if self.mask_dict is None:
+            # get the dict
+            mask_dict = np.load("%s/model_iter_%d.npz" % (self.save_all_dir, 0))
+            for name, mask in mask_dict.items():
+                reshaped_mask = mask.reshape(self.state_dict()[name].shape)
+                reshaped_mask = np.invert(reshaped_mask)
+                reshaped_mask = torch.from_numpy(reshaped_mask).to(self.device)
+                mask_dict[name] = reshaped_mask
+            self.mask_dict = mask_dict
+
+        return self.mask_dict
+
     def update_representation_icarl(self, dataset, prev_model, 
                                     curr_class_idxs, num_workers):
         '''
@@ -651,13 +663,14 @@ class IncrNet(nn.Module):
 
                 optimizer.step()
                 if self.should_prune:
-                    # with open("%s/model_iter_%d.pkl" % (self.save_all_dir, 0), "wb") as f:
-                    mask_dict = np.load("%s/model_iter_%d.npz" % (self.save_all_dir, 0))
-                    for name, mask in mask_dict.items():
-                        reshaped_mask = mask.reshape(self.state_dict()[name].shape)
-                        reshaped_mask = np.invert(reshaped_mask)
-                        reshaped_mask = torch.from_numpy(reshaped_mask).to(self.device)
-                        self.state_dict()[name].data[reshaped_mask] = 0
+                    # mask_dict = np.load("%s/model_iter_%d.npz" % (self.save_all_dir, 0))
+                    # for name, mask in mask_dict.items():
+                        # reshaped_mask = mask.reshape(self.state_dict()[name].shape)
+                        # reshaped_mask = np.invert(reshaped_mask)
+                        # reshaped_mask = torch.from_numpy(reshaped_mask).to(self.device)
+                        # self.state_dict()[name].data[reshaped_mask] = 0
+                    for name, mask in self.get_mask_dict().items():
+                        self.state_dict[name].data[mask] = 0
 
                 tqdm.write('Epoch [%d/%d], Minibatch [%d/%d] Loss: %.4f' 
                            % (epoch, self.num_epoch, 
@@ -760,7 +773,7 @@ class IncrNet(nn.Module):
                     elif self.loss == "CE":
                         cls_loss = self.ce_loss(logits, labels)
 
-                
+
                 # Get distillation loss
                 if self.dist and (bft or self.n_classes > 1):
                     logits_dist = logits[:, :self.n_known]
@@ -776,7 +789,7 @@ class IncrNet(nn.Module):
                     else:
                         dist_loss = MultiClassCrossEntropyLoss(
                             logits_dist, dist_target, self.T, device=self.device)
-                    
+
                     loss = dist_loss*self.T*self.T + cls_loss 
                 else:
                     loss = cls_loss
@@ -794,7 +807,7 @@ class IncrNet(nn.Module):
                     # print(freqs)
                     weights = self.batch_size/(freqs[labels].float())
                     loss = torch.mean(loss * weights)
-                
+
                 loss.backward()
                 # loss.backward(retain_graph=True)
                 # get the grads for each layer (dL/dW)
@@ -807,13 +820,8 @@ class IncrNet(nn.Module):
 
                 optimizer.step()
                 if self.should_prune:
-                    # with open("%s/model_iter_%d.pkl" % (self.save_all_dir, 0), "wb") as f:
-                    mask_dict = np.load("%s/model_iter_%d.npz" % (self.save_all_dir, 0))
-                    for name, mask in mask_dict.items():
-                        reshaped_mask = mask.reshape(self.state_dict()[name].shape)
-                        reshaped_mask = np.invert(reshaped_mask)
-                        reshaped_mask = torch.from_numpy(reshaped_mask).to(self.device)
-                        self.state_dict()[name].data[reshaped_mask] = 0
+                    for name, mask in self.get_mask_dict().items():
+                        self.state_dict()[name].data[mask] = 0
                 tqdm.write('Epoch [%d/%d], Minibatch [%d/%d] Loss: %.4f'
                            % ((epoch+1), num_epoch, i % num_batches_per_epoch+1, 
                               num_batches_per_epoch, loss.data))
