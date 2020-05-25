@@ -114,7 +114,7 @@ parser.add_argument('--fixed_ex', dest='fixed_ex', action='store_true',
                     help='Option to use a fixed set of exemplars')
 
 # Training options
-parser.add_argument("--fix_exposure", action='store_true', help="Fix order of class exposures")
+parser.add_argument("--fix_exposure", action='store_true', help="Fix order of first class exposures")
 parser.add_argument("--diff_order", dest="d_order", action="store_true",
                     help="Use a random order of classes introduced")
 parser.add_argument("--subset", dest="subset", action="store_true",
@@ -319,16 +319,24 @@ def expand_perm(perm_id, n_iters, num_classes, total_classes):
 
         # Multiply num_repetitions by number of classes per epoch so number of total learning exposures remains same
         num_repetitions = n_iters // total_classes * num_classes
-        perm_file = "permutation_files/permutation_%d_%d%s.npy" \
-                    % (total_classes // num_classes, num_repetitions, '' if args.mix_class else '-nomix')
+        perm_file = "permutation_files/permutation_%d_%d%s%s.npy" \
+                    % (total_classes // num_classes, num_repetitions, '' if args.mix_class else '-nomix',
+                       '-fix' if args.fix_exposure else '')
 
         if not os.path.exists(perm_file) or args.diff_perm:
             os.makedirs("permutation_files", exist_ok=True)
             # Create random permutation file and save
-            perm_arr = np.array(num_repetitions
-                                * list(np.arange(len(perm_id))))
-            np.random.shuffle(perm_arr)
-            np.save(perm_file, perm_arr)
+            if args.fix_exposure:
+                perm_arr = np.array((num_repetitions - 1)
+                                    * list(np.arange(len(perm_id))))
+                np.random.shuffle(perm_arr)
+                perm_arr = np.concatenate([np.arange(len(perm_id)), perm_arr])
+                np.save(perm_file, perm_arr)
+            else:
+                perm_arr = np.array(num_repetitions
+                                    * list(np.arange(len(perm_id))))
+                np.random.shuffle(perm_arr)
+                np.save(perm_file, perm_arr)
         else:
             print("Loading permutation file: %s" % perm_file)
 
