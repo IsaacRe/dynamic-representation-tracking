@@ -319,8 +319,8 @@ def expand_perm(perm_id, n_iters, num_classes, total_classes):
 
         # Multiply num_repetitions by number of classes per epoch so number of total learning exposures remains same
         num_repetitions = n_iters // total_classes * num_classes
-        perm_file = "permutation_files/permutation_%d_%d.npy" \
-                    % (total_classes // num_classes, num_repetitions)
+        perm_file = "permutation_files/permutation_%d_%d%s.npy" \
+                    % (total_classes // num_classes, num_repetitions, '' if args.mix_class else '-nomix')
 
         if not os.path.exists(perm_file) or args.diff_perm:
             os.makedirs("permutation_files", exist_ok=True)
@@ -525,6 +525,7 @@ acc_matr = np.zeros((args.total_classes, args.num_iters))
 cond_var = mp.Condition()
 train_counter = mp.Value("i", 0)
 test_counter = mp.Value("i", 0)
+stop_early = mp.Value("i", 0)
 dataQueue = mp.Queue()
 all_done = mp.Event()
 data_mgr = mp.Manager()
@@ -577,10 +578,13 @@ def train_run(device):
         cond_var.acquire()
         # while loop to avoid spurious wakeups
         while test_counter.value + args.test_freq <= train_counter.value:
+            if bool(stop_early.value):
+                break
             print("[Train Process] Waiting on test process")
             print("[Train Process] train_counter : ", train_counter.value)
             print("[Train Process] test_counter : ", test_counter.value)
             cond_var.wait()
+
         cond_var.release()
         train_wait_time += time.time() - time_ptr
 
