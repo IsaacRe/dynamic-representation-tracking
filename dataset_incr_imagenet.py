@@ -53,7 +53,7 @@ class iImageNet(Dataset):
                 np.zeros((self.num_train, 3, self.img_size, self.img_size), dtype=np.float32)
             self.train_labels = np.zeros(self.num_train, dtype=np.int)
             for i, (train_image, train_label) in enumerate(self.train_samples):
-                if i % 200 == 0:
+                if i % 2000 == 0:
                     print("curr iteration: ", i)
                 img = np.asarray(Image.open(train_image).convert("RGB"))
                 img = cv2.resize(img, (self.img_size, self.img_size)).transpose(2, 0, 1)
@@ -245,11 +245,15 @@ class iImageNet(Dataset):
             for i, (gt_label, model_label) in enumerate(zip(classes, model_classes)):
                 rand = np.random.choice(500, self.num_e_frames, replace = self.s_w_replace)
 
-                print("gt label: ", gt_label)
-                print("all train labels unique: ", np.unique(self.all_train_labels))
+                # print("gt label: ", gt_label)
+                # print("all train labels unique: ", np.unique(self.all_train_labels))
+                # print("all train data shape: ", self.all_train_data.shape)
 
                 s_ind = np.where( \
                     np.array(self.all_train_labels) == gt_label)[0]
+
+                # print("s ind: ", s_ind)
+                # print("random: ", rand)
 
                 s_images = self.all_train_data[s_ind[rand]]
 
