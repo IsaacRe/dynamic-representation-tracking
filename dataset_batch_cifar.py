@@ -12,13 +12,15 @@ class CIFAR20(CIFAR100):
                  mean_image=None,
                  transform=None,
                  target_transform=None,
-                 download=False):
+                 download=False,
+                 crop=True):
         super(CIFAR20, self).__init__(root,
                                       train=train,
                                       transform=transform,
                                       target_transform=target_transform,
                                       download=download)
 
+        self.crop = crop
         if train:
             train_data = []
             train_labels = []
@@ -67,13 +69,18 @@ class CIFAR20(CIFAR100):
         if self.train:
             img = self.train_data[index]
             img = Image.fromarray(np.uint8(img))
-            img = np.array(self.transform(img))
-            img = img.transpose(2,0,1)
+            if self.transform is not None:
+                img = self.transform(img)
+            img = np.array(img).transpose(2,0,1)
 
             if self.mean_image is not None:
                 img = (img - self.mean_image)/255.
             else:
                 img /= 255.
+
+            if not self.crop:
+                return index, torch.FloatTensor(img), self.train_labels[index]
+
             # Augment : Random crops and horizontal flips
             random_cropped = np.zeros(img.shape, dtype=np.float32)
             padded = np.pad(img, ((0, 0), (4, 4), (4, 4)),

@@ -232,7 +232,7 @@ class ThresholdLearner(ActivationTracker):
         return correct / total * 100.
 
     def predict(self, loader, output_raw=False):
-        with self.threshold_context(cache_thresholded_acts=True, cache_raw_acts=output_raw):
+        with self.threshold_context(hard=True, cache_thresholded_acts=True, cache_raw_acts=output_raw):
             data_pass(loader, self.network, device=self.device, gradient=False)
             raw = None
             if output_raw:

@@ -23,7 +23,7 @@ from csv_writer import CSVWriter
 from feature_matching import match, between_net_correlation
 from feature_vis_2 import PatchTracker
 from feature_generalizability import ANOVATracker
-from vc_utils.vc_dataset import set_base_dataset, get_vc_dataset, test_vc_accuracy
+from vc_utils.vc_dataset import set_base_dataset, get_vc_dataset, test_vc_accuracy, test_vc_accuracy_v1
 from vc_utils.activation_tracker import ActivationTracker
 set_base_dataset('CIFAR')
 
@@ -191,6 +191,8 @@ parser.add_argument('--lr_vc', type=float, default=0.01, help='Learning rate for
 parser.add_argument('--batch_size_train_vc', type=int, default=100, help='Batch size for training VC classification'
                                                                          ' layer')
 parser.add_argument('--batch_size_test_vc', type=int, default=100, help='Batch size for testing VC classification')
+parser.add_argument('--vc_data_balance', action='store_true', help='Balance +/- samples for VC dataset')
+parser.add_argument('--vc_recall', action='store_true', help='Compute recall for VC classification performance')
 
 # System options
 parser.add_argument("--test_freq", default=1, type=int,
@@ -363,10 +365,16 @@ def test_run(device):
     writers = [writer]
     if args.track_vc:
         assert corr_model is not None, 'No corr_model specified for Visual Concept identification'
-        vc_dataset = get_vc_dataset(args, corr_model, args.feat_vis_layer_name[-1], all_classes,
-                                    root='./data', train=True, transform=transform, mean_image=mean_image, download=False)
-        vc_writer = CSVWriter(vc_save_file + '.csv', 'Iteration', *(str(idx) for idx in vc_dataset.kept_idxs))
+        vc_dataset_test = get_vc_dataset(args, corr_model, args.feat_vis_layer_name[-1], all_classes,
+                                         balance=args.vc_data_balance,
+                                         root='./data', train=False, transform=None, mean_image=mean_image)
+        #acc, w = test_vc_accuracy(args, corr_model, args.feat_vis_layer_name[-1], vc_dataset, vc_dataset_test, device=device,
+        #                          uniform_init=True, epochs=10)
+
+        vc_writer = CSVWriter(vc_save_file + '.csv', 'Iteration', *(str(idx) for idx in vc_dataset_test.kept_idxs))
         writers += [vc_writer]
+        if vc_dataset_test.sorted_filters is not None:
+            np.save('%s-sorted_filters.npy' % args.outfile.split('.')[0], vc_dataset_test.sorted_filters)
 
     vc_weights = []
 
@@ -471,8 +479,9 @@ def test_run(device):
 
             if args.track_vc:
                 print('[Test Process] Testing accuracy over visual concepts...')
-                vc_acc_, vc_weight = test_vc_accuracy(args, test_model.model, vc_module_name, vc_dataset, device=device)
-                vc_acc = {str(idx): acc for idx, acc in zip(vc_dataset.kept_idxs, vc_acc_)}
+                vc_acc_, vc_weight = test_vc_accuracy_v1(args, test_model.model, vc_module_name,
+                                                          vc_dataset_test, device=device, recall=args.vc_recall)
+                vc_acc = {str(idx): acc for idx, acc in zip(vc_dataset_test.kept_idxs, vc_acc_)}
                 vc_writer.write(Iteration=s, **vc_acc)
                 vc_weights += [vc_weight]
                 if args.save_vc_weights:
