@@ -174,6 +174,9 @@ parser.add_argument("--debug", action='store_true',
 parser.add_argument('--diff_perm', action='store_true')
 parser.add_argument('--seed', type=int, default=1, help='Set torch and numpy seed')
 
+# data directory
+parser.add_argument("--data_dir", default="/data/cgu45/ImageNet_sub", help="directory of the imagenet dataset")
+
 parser.set_defaults(ncm=False)
 parser.set_defaults(dist=False)
 parser.set_defaults(pretrained=True)
@@ -325,24 +328,25 @@ if args.mix_class:
 
 np.random.seed(args.seed)
 
-train_set = iImageNet(args, root="/data/cgu45",
+
+train_set = iImageNet(args, root=args.data_dir,
                              n_classes=num_classes,
                              train=True,
                              transform=transform,
                              mean_image=mean_image)
-test_set = iImageNet(args, root="/data/cgu45",
+test_set = iImageNet(args, root=args.data_dir,
                              n_classes=num_classes,
                              train=False,
                              transform=None,
                              mean_image=mean_image)
 if args.ft_fc:
     train_fc_set = ImageNet(classes=all_classes,
-                           root='/data/cgu45',
+                           root=args.data_dir,
                            train=True,
                            transform=transform,
                            mean_image=mean_image)
 test_all_set = ImageNet(classes=all_classes,
-                      root='./data',
+                      root=args.data_dir,
                       train=False,
                       transform=None,
                       mean_image=mean_image)
