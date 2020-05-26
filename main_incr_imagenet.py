@@ -177,6 +177,9 @@ parser.add_argument('--seed', type=int, default=1, help='Set torch and numpy see
 # data directory
 parser.add_argument("--data_dir", default="/data/cgu45/ImageNet_sub", help="directory of the imagenet dataset")
 
+# pruning options
+parser.add_argument("--should_prune", action="store_true")
+
 parser.set_defaults(ncm=False)
 parser.set_defaults(dist=False)
 parser.set_defaults(pretrained=True)
@@ -187,6 +190,7 @@ parser.set_defaults(save_all=False)
 parser.set_defaults(resume=False)
 parser.set_defaults(one_gpu=False)
 parser.set_defaults(sample_w_replacement=True)
+parser.set_defaults(should_prune=False)
 
 # Print help if no arguments passed
 if len(sys.argv)==1:
