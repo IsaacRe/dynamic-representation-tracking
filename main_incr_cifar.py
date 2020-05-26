@@ -261,7 +261,7 @@ if not os.path.exists(os.path.dirname(args.outfile)):
     if len(os.path.dirname(args.outfile)) != 0:
         os.makedirs(os.path.dirname(args.outfile))
 if args.save_all_dir is None:
-    args.save_all_dir = args.outfile + '-saved_models'
+    args.save_all_dir = args.outfile
 if args.save_all and not os.path.exists(args.save_all_dir):
     os.makedirs(args.save_all_dir)
 
