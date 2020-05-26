@@ -193,6 +193,8 @@ parser.add_argument('--batch_size_train_vc', type=int, default=100, help='Batch 
 parser.add_argument('--batch_size_test_vc', type=int, default=100, help='Batch size for testing VC classification')
 parser.add_argument('--vc_data_balance', action='store_true', help='Balance +/- samples for VC dataset')
 parser.add_argument('--vc_recall', action='store_true', help='Compute recall for VC classification performance')
+parser.add_argument('--save_activations', action='store_true', help='Store activations of the final model at the'
+                                                                    ' feat_vis layer')
 
 # System options
 parser.add_argument("--test_freq", default=1, type=int,
@@ -569,7 +571,7 @@ def test_run(device):
 
                 np.savez('%s-matr.npz' % os.path.splitext(args.outfile)[0],
                          acc_matr=acc_matr,
-                         model_hyper_params=model.fetch_hyper_params(),
+                         model_hyper_params=test_model.fetch_hyper_params(),
                          args=args, num_iters_done=s)
 
                 # Track ft-fc runtime (in eons lmao)

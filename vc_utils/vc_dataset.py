@@ -188,7 +188,8 @@ def _define_VisualConceptDataset(base_dataset):
                     self.labeler.label_data(self.get_loader(batch_size=batch_size, shuffle=True),
                                             self.get_loader(batch_size=batch_size),
                                             order_by_importance=True,
-                                            balance=balance)
+                                            balance=balance,
+                                            save_acts=args.save_activations)
                 self.total_classes = labels.shape[1]
                 setattr(self, labels_attr, labels)
 
@@ -208,6 +209,9 @@ def _define_VisualConceptDataset(base_dataset):
                     self._prune_mask, self.test_labels, self.valid_localities = \
                         self.labeler.label_data(self.get_loader(batch_size=batch_size))
                     self.total_classes = self.test_labels.shape[1]
+
+            print('\n\n A total of %d/%d filters discarded\n\n' % (len(self.pruned_idxs),
+                                                                   len(self.pruned_idxs) + len(self.kept_idxs)))
 
         def __getitem__(self, item):
             i, img, lbl = super(VisualConceptDataset, self).__getitem__(item)
@@ -334,42 +338,7 @@ class VCLabeler:
 
         return present[:, kept_filters], select[:, kept_filters], discard_filters
 
-
-
-
-
-        p_samples = np.stack(np.where(present), axis=1)
-        p_filter_samples = [p_samples[p_samples[:, 1] == i] for i in tqdm(range(num_filters))]
-
-        n_samples = np.stack(np.where(absent), axis=1)
-        n_filter_samples = [n_samples[n_samples[:, 1] == i] for i in tqdm(range(num_filters))]
-
-        discard_filters = {i for i in range(num_filters) if
-                           n_filter_samples[i].shape[0] < min_per_bin_class or
-                           p_filter_samples[i].shape[0] < min_per_bin_class}
-
-        # Randomly sample min_per_bin_class samples for each binary class of each visual concept and arrange by vc
-        kept_filter_samples = [
-            (
-                i,
-                np.concatenate([p_s[np.random.choice(p_s.shape[0], min_per_bin_class, replace=False)],
-                                n_s[np.random.choice(n_s.shape[0], min_per_bin_class, replace=False)]], axis=0)
-            )
-            for i, (p_s, n_s) in enumerate(zip(p_filter_samples, n_filter_samples))
-            if i not in discard_filters
-        ]
-
-        assert len(kept_filter_samples) > 0, 'All filters were removed. Change threhsolds or et min_data_points lower'
-
-        kept_filter_idxs, kept_sample_idxs = zip(*kept_filter_samples)
-        kept_sample_idxs = tuple(np.concatenate(kept_sample_idxs, axis=0).transpose(1, 0))
-
-        select_samples = torch.zeros_like(present).type(torch.bool)
-        select_samples[kept_sample_idxs] = True
-
-        return present[:, kept_filter_idxs], select_samples[:, kept_filter_idxs], discard_filters
-
-    def label_data(self, *loaders, seed=0, order_by_importance=False, balance=False):
+    def label_data(self, *loaders, seed=0, order_by_importance=False, balance=False, save_acts=False):
         rand_state = np.random.get_state()
         np.random.seed(seed)
 
@@ -381,10 +350,11 @@ class VCLabeler:
 
             #TODO experiments
             """
-            accs = []
-            torch.save(self.network.state_dict(), 'temp.pth')
-            def reload_params():
-                self.network.load_state_dict(torch.load('temp.pth'))
+            if test_threshold_acc is not None:
+                accs = []
+                torch.save(self.network.state_dict(), 'temp.pth')
+                def reload_params():
+                    self.network.load_state_dict(torch.load('temp.pth'))
 
             # 0 No train test on t=1.0
             reload_params()
@@ -451,6 +421,10 @@ class VCLabeler:
             # predict feature presence
             raw_activations, binary_activations = self.dynamic_thresholder.predict(loader,
                                                                                    output_raw=order_by_importance)
+
+            if save_acts:
+                np.save('%s-activations.npy' % self.layer_name, raw_activations.flatten().numpy())
+
             labels = binary_activations
 
             discard_filter_mask = None
