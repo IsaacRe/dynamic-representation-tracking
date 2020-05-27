@@ -23,7 +23,7 @@ from csv_writer import CSVWriter
 from feature_matching import match, between_net_correlation
 from feature_vis_2 import PatchTracker
 from feature_generalizability import ANOVATracker
-from vc_utils.vc_dataset import set_base_dataset, get_vc_dataset, test_vc_accuracy, test_vc_accuracy_v1
+from vc_utils.vc_dataset import set_base_dataset, get_vc_dataset, test_vc_accuracy_v1, test_threshold_acc
 from vc_utils.activation_tracker import ActivationTracker
 set_base_dataset('CIFAR')
 
@@ -187,6 +187,15 @@ parser.add_argument('--vc_dataset_size', type=int, default=10000,
                     help='Number of datapoints for the binary classification task of each visual concept')
 parser.add_argument('--save_vc_weights', action='store_true', help='Store weights resulting from classification'
                                                                    ' layer training')
+parser.add_argument('--validate_multiple_thresholds', action='store_true', help='Validate the thresholds passed below')
+parser.add_argument('--thresholds_to_validate', type=float, nargs='*', default=[],
+                    help='Threshold values for binary features on which to validate accuracy of final model')
+parser.add_argument('--eval_threshold_acc', action='store_true', help='Evaluate accuracy of the thresholded model '
+                                                                      'during each exposure')
+parser.add_argument('--validate_final_only', action='store_true', help='Exit after final model validation has been '
+                                                                       'performed')
+parser.add_argument('--vc_epochs', type=int, default=5, help='For thresholded model accuracy validation - '
+                                                             'number of epochs to finetune on binary features')
 parser.add_argument('--lr_vc', type=float, default=0.01, help='Learning rate for VC classification layer')
 parser.add_argument('--batch_size_train_vc', type=int, default=100, help='Batch size for training VC classification'
                                                                          ' layer')
@@ -307,7 +316,7 @@ test_set = iCIFAR100(args, root="./data",
                              download=True,
                              transform=None,
                              mean_image=mean_image)
-if args.ft_fc:
+if args.ft_fc or args.eval_threshold_acc or args.validate_multiple_thresholds:
     train_fc_set = CIFAR20(all_classes,
                            root='./data',
                            train=True,
@@ -361,6 +370,37 @@ def test_run(device):
     print("####### Test Process Running ########")
     test_model = None
 
+    # Data loader initialization
+    test_all_loader = torch.utils.data.DataLoader(test_all_set,
+                                                  batch_size=args.batch_size_test, shuffle=False,
+                                                  num_workers=0 if args.debug else args.num_workers,
+                                                  pin_memory=True)
+    if args.feat_corr:
+        correlation_loader = torch.utils.data.DataLoader(test_all_set,
+                                                         batch_size=args.batch_size_corr, shuffle=False,
+                                                         num_workers=0 if args.debug else args.num_workers,
+                                                         pin_memory=True)
+    if args.ft_fc or args.eval_threshold_acc or args.validate_multiple_thresholds:
+        train_loader = torch.utils.data.DataLoader(train_fc_set,
+                                                   batch_size=args.batch_size_ft_fc, shuffle=True,
+                                                   num_workers=0 if args.debug else args.num_workers,
+                                                   pin_memory=True)
+
+    # VC threshold validation
+    if args.validate_multiple_thresholds:
+        model_ = load_model(load_iters[-1]).model
+        model_.fc = torch.nn.Linear(model_.fc.in_features, total_classes)
+        model_.cuda(0)
+        t_accs, ft_acc = test_threshold_acc(args, test_all_loader, model_, args.feat_vis_layer_name[-1],
+                                            train_loader=train_loader, ts=args.thresholds_to_validate)
+        save = {str(t): acc for t, acc in zip(args.thresholds_to_validate, t_accs)}
+        save['baseline'] = ft_acc
+        np.savez('%s-bin-acc.npz' % args.feat_vis_layer_name[-1],
+                 **save)
+
+        if args.validate_final_only:
+            sys.exit(0)
+
     # Initialize VC Dataset
     # TODO should we use transform?
     vc_save_file = args.outfile.split('.')[0] + '-vc_acc'
@@ -379,6 +419,8 @@ def test_run(device):
             np.save('%s-sorted_filters.npy' % args.outfile.split('.')[0], vc_dataset_test.sorted_filters)
 
     vc_weights = []
+    ft_accs = []
+    bin_ft_accs = []
 
     test_wait_time = 0
     with ContextMerger(*writers):
@@ -406,28 +448,26 @@ def test_run(device):
             test_model.device = device
             test_model.cuda(device=device)
             test_model.eval()
-            if args.ft_fc:
-                train_loader = torch.utils.data.DataLoader(train_fc_set,
-                                                           batch_size=args.batch_size_ft_fc, shuffle=True,
-                                                           num_workers=0 if args.debug else args.num_workers,
-                                                           pin_memory=True)
+
             if args.test_saved:
                 test_loader = torch.utils.data.DataLoader(test_set,
                                                           batch_size=args.batch_size_test, shuffle=False,
                                                           num_workers=0 if args.debug else args.num_workers,
                                                           pin_memory=True)
 
-            test_all_loader = torch.utils.data.DataLoader(test_all_set,
-                                                          batch_size=args.batch_size_test, shuffle=False,
-                                                          num_workers=0 if args.debug else args.num_workers,
-                                                          pin_memory=True)
-            if args.feat_corr:
-                correlation_loader = torch.utils.data.DataLoader(test_all_set,
-                                                                 batch_size=args.batch_size_corr, shuffle=False,
-                                                                 num_workers=0 if args.debug else args.num_workers,
-                                                                 pin_memory=True)
-
             writer.write(Model_classes=test_model.n_known, Iteration=s)
+
+            ############################# Thresholded Model Accuracy ########################################
+
+            # TODO
+            if args.eval_threshold_acc:
+                fc = test_model.fc
+                model_ = test_model.model
+                model_.fc = torch.nn.Linear(fc.in_features, total_classes)
+                [t_acc], ft_acc = test_threshold_acc(args, test_all_loader, model_, args.feat_vis_layer_name[-1],
+                                                    train_loader=train_loader, ts=[args.present_vc_threshold])
+                ft_accs += [ft_acc]
+                bin_ft_accs += [t_acc]
 
             ############################# Test Accuracy (Seen Classes) ######################################
 

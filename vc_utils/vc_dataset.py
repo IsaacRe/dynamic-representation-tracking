@@ -29,6 +29,14 @@ def get_vc_dataset(args, model, layer_name, *dset_args, device=0, balance=False,
     return vc_dset
 
 
+def test_threshold_acc(args, test_loader, model, layer_name, train_loader=None, ts=None, device=0):
+    if ts is None:
+        ts = [args.present_vc_threshold]
+
+    labeler = VCLabeler(args, model, layer_name, device=device)
+    return labeler.test_thresholds(test_loader, *ts, train_loader=train_loader, epochs=args.vc_epochs, lr=args.lr_vc)
+
+
 def train_classification_layer_v1(args, network, module_name, vc_dset, device=0, act_tracker=None):
     if act_tracker is None:
         act_tracker = ActivationTracker(module_names=[module_name], network=network, store_on_gpu=True)
@@ -312,6 +320,33 @@ class VCLabeler:
                                                  store_on_gpu=store_on_gpu,
                                                  hook_manager=self.hook_manager)
 
+    def test_thresholds(self, test_loader, *ts, train_loader=None, epochs=5, lr=0.01, test_full=True):
+        accs = []
+        torch.save(self.network.state_dict(), 'temp.pth')
+
+        def reload_params():
+            self.network.load_state_dict(torch.load('temp.pth'))
+
+        for t in ts:
+            reload_params()
+            self.dynamic_thresholder.fill_thresholds(t)
+            if train_loader is not None:
+                self.network.train()
+                self.dynamic_thresholder.train(train_loader, epochs=epochs, lr_network=lr, lr_thresholds=0, hard=True)
+            self.network.eval()
+            accs += [self.dynamic_thresholder.test(test_loader)]
+
+        ft_acc = None
+        if test_full:
+            reload_params()
+            if train_loader is not None:
+                self.network.train()
+                self.dynamic_thresholder.train(train_loader, epochs=epochs, lr_network=lr, threshold=False)
+            self.network.eval()
+            ft_acc = self.dynamic_thresholder.test(test_loader, threshold=False)
+
+        return accs, ft_acc
+
     @staticmethod
     def get_balanced_data_mask(present, absent, min_data_points, balance=True):
         num_filters = present.shape[1]
@@ -349,7 +384,6 @@ class VCLabeler:
             np.random.set_state(rand_state)
 
             #TODO experiments
-            """
             if test_threshold_acc is not None:
                 accs = []
                 torch.save(self.network.state_dict(), 'temp.pth')
@@ -407,7 +441,6 @@ class VCLabeler:
             self.dynamic_thresholder.train(train_loader, epochs=3, lr_network=0.01, lr_thresholds=0, hard=False)
             accs += [self.dynamic_thresholder.test(loader, hard=True)]
             np.save('experiments-temp.npy', np.array(accs))
-            """
 
             # train thresholds
             #self.dynamic_thresholder.train(train_loader, epochs=3, lr_network=0.01, fit_threshold=False,

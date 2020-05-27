@@ -219,14 +219,15 @@ class ThresholdLearner(ActivationTracker):
 
     def test(self, loader, threshold=True, hard=True):
         total = correct = 0
-        with self.threshold_context(threshold=threshold, hard=hard):
-            for i, x, y in tqdm(loader):
-                x, y = x.to(self.device), y.to(self.device)
-                out = self.network(x)
+        with torch.no_grad():
+            with self.threshold_context(threshold=threshold, hard=hard):
+                for i, x, y in tqdm(loader):
+                    x, y = x.to(self.device), y.to(self.device)
+                    out = self.network(x)
 
-                pred = out.argmax(dim=1)
-                correct += (pred == y).sum().item()
-                total += len(y)
+                    pred = out.argmax(dim=1)
+                    correct += (pred == y).sum().item()
+                    total += len(y)
 
         print('Model accuracy after binarization of features: %d/%d (%.2f)' % (correct, total, correct / total * 100.))
         return correct / total * 100.
