@@ -238,7 +238,7 @@ torch.manual_seed(args.seed)
 np.random.seed(args.seed)
 
 # ensure samples is a multiple of num_classes
-args.lexp_len = (args.lexp_len // args.num_classes) * args.num_classes
+# args.lexp_len = (args.lexp_len // args.num_classes) * args.num_classes
 
 torch.backends.cudnn.benchmark = True
 mp.set_sharing_strategy("file_system")
