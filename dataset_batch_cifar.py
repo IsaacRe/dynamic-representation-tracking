@@ -39,7 +39,7 @@ class CIFAR20(CIFAR100):
 
             # resize images
             train_data = self.train_data
-            self.train_data = np.zeros((len(self.train_labels), self.img_size, self.img_size, 3))
+            self.train_data = np.zeros((len(self.train_labels), self.img_size, self.img_size, 3), dtype=np.uint8)
             for i, img in enumerate(tqdm(train_data)):
                 img = cv2.resize(img, (self.img_size, self.img_size))
                 self.train_data[i] = img
@@ -59,7 +59,7 @@ class CIFAR20(CIFAR100):
 
             # resize images
             test_data = self.test_data
-            self.test_data = np.zeros((len(self.test_labels), self.img_size, self.img_size, 3))
+            self.test_data = np.zeros((len(self.test_labels), self.img_size, self.img_size, 3), dtype=np.uint8)
             for i, img in enumerate(tqdm(test_data)):
                 img = cv2.resize(img, (self.img_size, self.img_size))
                 self.test_data[i] = img
