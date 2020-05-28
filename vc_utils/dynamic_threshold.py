@@ -153,7 +153,11 @@ class ThresholdLearner(ActivationTracker):
             # if training the thresholds, soft-thresholding must be used
             hard = False
 
-        net_optim = torch.optim.Adam(self.network.parameters(), lr=lr_network)
+        net_params = []
+        net_names, net_modules = zip(*self.network.named_modules())
+        for m in net_modules[net_names.index(self.module_name) + 1:]:
+            net_params += list(m.parameters())
+        net_optim = torch.optim.SGD(net_params, lr=lr_network)
         if lr_thresholds is not None and fit_threshold:
             self.set_lr(lr_thresholds)
         ce_loss = torch.nn.CrossEntropyLoss()

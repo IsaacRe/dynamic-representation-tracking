@@ -205,7 +205,7 @@ parser.add_argument('--vc_data_balance', action='store_true', help='Balance +/- 
 parser.add_argument('--vc_recall', action='store_true', help='Compute recall for VC classification performance')
 parser.add_argument('--save_activations', action='store_true', help='Store activations of the final model at the'
                                                                     ' feat_vis layer')
-parser.add_argument('--lr_threshold', type=float, default=0.1, help='Learning rate for threshold learning')
+parser.add_argument('--lr_threshold', type=float, default=0.04, help='Learning rate for threshold learning')
 
 
 # System options
@@ -425,7 +425,7 @@ def test_run(device):
         vc_writer = CSVWriter(vc_save_file + '.csv', 'Iteration', *(str(idx) for idx in vc_dataset_test.kept_idxs))
         writers += [vc_writer]
         np.savez('%s-coverage.npz' % vc_save_file, kept_idxs=vc_dataset_test.kept_idxs,
-                 sorted_filters=vc_dataset_test.sorted_filters)
+                 sorted_filters=vc_dataset_test.sorted_filters, num_positive=vc_dataset_test.num_p)
 
     vc_weights = []
     ft_accs = []
@@ -468,15 +468,17 @@ def test_run(device):
 
             ############################# Thresholded Model Accuracy ########################################
 
-            # TODO
             if args.eval_threshold_acc:
                 fc = test_model.fc
                 model_ = test_model.model
                 model_.fc = torch.nn.Linear(fc.in_features, total_classes)
+                model_.fc.cuda(device)
                 [t_acc], ft_acc = test_threshold_acc(args, test_all_loader, model_, args.feat_vis_layer_name[-1],
                                                     train_loader=train_loader, ts=[args.present_vc_threshold])
                 ft_accs += [ft_acc]
                 bin_ft_accs += [t_acc]
+                np.savez('%s-bin-acc.npz' % args.outfile.split('.')[0], iteration=s, baseline=np.stack(ft_accs),
+                         **{str(args.present_vc_threshold): np.stack(bin_ft_accs)})
 
             ############################# Test Accuracy (Seen Classes) ######################################
 

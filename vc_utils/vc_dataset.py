@@ -34,7 +34,8 @@ def test_threshold_acc(args, test_loader, model, layer_name, train_loader=None, 
         ts = [args.present_vc_threshold]
 
     labeler = VCLabeler(args, model, layer_name, device=device)
-    return labeler.test_thresholds(test_loader, *ts, train_loader=train_loader, epochs=args.vc_epochs, lr=args.lr_vc)
+    return labeler.test_thresholds(test_loader, *ts, train_loader=train_loader, epochs=args.vc_epochs,
+                                   lr=args.lr_threshold)
 
 
 def train_classification_layer_v1(args, network, module_name, vc_dset, device=0, act_tracker=None,
@@ -251,9 +252,10 @@ def _define_VisualConceptDataset(base_dataset):
             self.filter_weights = None
             self._prune_mask = None
             self.sorted_filters = None
-            self.save_file = 'cache/%s-vc_%s_data-%s.npz' % (args.save_all_dir.split('/')[-1],
-                                                             'train' if train else 'test',
-                                                             str(args.present_vc_threshold))
+            self.save_file = 'cache/%s-vc_%s-%s_data-t_%s.npz' % (args.save_all_dir.split('/')[-1],
+                                                                  module_name,
+                                                                  'train' if train else 'test',
+                                                                  str(args.present_vc_threshold))
 
             if cache and exists(self.save_file):
                 self.load_cache()
@@ -264,7 +266,7 @@ def _define_VisualConceptDataset(base_dataset):
                     assert hasattr(self, 'test_labels')
                     labels_attr = 'test_labels'
                 setattr(self, 'class_' + labels_attr, getattr(self, labels_attr))
-                self._prune_mask, labels, self.valid_localities, self.sorted_filters = \
+                self._prune_mask, labels, self.valid_localities, self.sorted_filters, self.num_p = \
                     self.labeler.label_data(self.get_loader(batch_size=batch_size, shuffle=True),
                                             self.get_loader(batch_size=batch_size),
                                             order_by_importance=True,
@@ -293,7 +295,8 @@ def _define_VisualConceptDataset(base_dataset):
                      valid_localities=self.valid_localities.numpy(),
                      filter_weights=self.filter_weights.numpy(),
                      prune_mask=self._prune_mask,
-                     sorted_filters=self.sorted_filters)
+                     sorted_filters=self.sorted_filters,
+                     num_positive=self.num_p)
 
         def load_cache(self):
             file = np.load(self.save_file)
@@ -301,7 +304,10 @@ def _define_VisualConceptDataset(base_dataset):
             self.valid_localities = torch.Tensor(file['valid_localities']).type(torch.bool)
             self.filter_weights = torch.Tensor(file['filter_weights'])
             self._prune_mask = file['prune_mask']
+            if self._prune_mask.size == 1 and self._prune_mask.item() is None:
+                self._prune_mask = None
             self.sorted_filters = file['sorted_filters']
+            self.num_p = file['num_positive']
 
         def __getitem__(self, item):
             i, img, lbl = super(VisualConceptDataset, self).__getitem__(item)
@@ -418,21 +424,6 @@ class VCLabeler:
                              save_pruned_path=args.save_pruned_path,
                              hook_manager=self.hook_manager)
 
-        """# threshold pruning
-        self.thresholder = ConvActivationThreshold(network, module_name,
-                                                   store_on_gpu=store_on_gpu,
-                                                   hook_manager=self.hook_manager)
-        self.pruner = Pruner(network, module_name,
-                             prune_ratio=args.prune_ratio,
-                             load_pruned_path=self.load_pruned_path,
-                             store_on_gpu=store_on_gpu,
-                             save_pruned_path=args.save_pruned_path,
-                             hook_manager=self.hook_manager)
-        self.act_tracker = ActivationTracker(module_names=[module_name], network=network,
-                                             store_on_gpu=store_on_gpu,
-                                             hook_manager=self.hook_manager)
-        """
-
     def test_thresholds(self, test_loader, *ts, train_loader=None, epochs=5, lr=0.01, test_full=True):
         accs = []
         torch.save(self.network.state_dict(), 'temp.pth')
@@ -442,7 +433,7 @@ class VCLabeler:
 
         for t in ts:
             reload_params()
-            self.dynamic_thresholder.fill_thresholds(t)
+            self.dynamic_thresholder.set_threshold(t)
             if train_loader is not None:
                 self.network.train()
                 self.dynamic_thresholder.train(train_loader, epochs=epochs, lr_network=lr, lr_thresholds=0, hard=True)
@@ -472,7 +463,7 @@ class VCLabeler:
         kept_filters = np.where(np.bitwise_and(num_a >= min_per_bin_class, num_p >= min_per_bin_class))[0]
 
         if not balance:
-            return present[:, kept_filters], None, discard_filters
+            return present[:, kept_filters], None, discard_filters, num_p
 
         select = torch.zeros_like(present).type(torch.bool)
         for i in kept_filters:
@@ -484,7 +475,7 @@ class VCLabeler:
             a_select[np.random.choice(int(num_a[i]), min_per_bin_class, replace=False)] = True
             select[:, i][absent[:, i] == 1] = a_select
 
-        return present[:, kept_filters], select[:, kept_filters], discard_filters
+        return present[:, kept_filters], select[:, kept_filters], discard_filters, num_p
 
     def label_data(self, *loaders, seed=0, order_by_importance=False, balance=False, save_acts=False,
                    train_threshold=False):
@@ -515,9 +506,9 @@ class VCLabeler:
 
         discard_filter_mask = None
         if balance:
-            labels, select, discard_filters = self.get_balanced_data_mask(labels, -(labels - 1), 1000)
+            labels, select, discard_filters, num_p = self.get_balanced_data_mask(labels, -(labels - 1), 1000)
         else:
-            labels, _, discard_filters = self.get_balanced_data_mask(labels, -(labels - 1), 1000)
+            labels, _, discard_filters, num_p = self.get_balanced_data_mask(labels, -(labels - 1), 1000)
             select = torch.ones_like(labels).type(torch.bool)
         if len(discard_filters) > 0:
             discard_filter_mask = np.zeros(binary_activations.shape[1]).astype(np.bool_)
@@ -533,7 +524,7 @@ class VCLabeler:
 
         print('VC labeling finished.')
 
-        return discard_filter_mask, labels, select, sorted_filters
+        return discard_filter_mask, labels, select, sorted_filters, num_p
 
         """ loader, = loaders
             activations = self.act_tracker.compute_activations_from_data(loader, device=self.device)
