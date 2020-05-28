@@ -6,6 +6,7 @@ from PIL import Image
 import cv2
 import time
 import copy
+from tqdm.auto import tqdm
 from collections import Counter
 
 class iCIFAR10(CIFAR10):
@@ -46,12 +47,13 @@ class iCIFAR10(CIFAR10):
         num_train = self.num_e_frames * self.n_classes
         self.num_train = num_train
 
+        print('Preparing incremental dataset')
         # Select a subset of classes for incremental training and testing
         if self.train:
             # Resize and transpose to CxWxH all train images
             resized_train_images = np.zeros((len(self.train_data), 3, \
                 self.img_size, self.img_size), dtype=np.uint8)
-            for i, train_image in enumerate(self.train_data):
+            for i, train_image in enumerate(tqdm(self.train_data)):
                 resized_train_images[i] = cv2.resize(train_image, \
                     (self.img_size, self.img_size)).transpose(2,0,1)
             self.train_data = resized_train_images
@@ -84,7 +86,7 @@ class iCIFAR10(CIFAR10):
             # Resize all test images
             resized_test_images = np.zeros((len(self.test_data), 3, \
                 self.img_size, self.img_size), dtype=np.uint8)
-            for i, test_image in enumerate(self.test_data):
+            for i, test_image in enumerate(tqdm(self.test_data)):
                 resized_test_images[i] = cv2.resize(test_image, \
                     (self.img_size, self.img_size)).transpose(2,0,1)
             self.test_data = resized_test_images

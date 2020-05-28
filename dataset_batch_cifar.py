@@ -1,6 +1,7 @@
 import torch
 from torchvision.datasets import CIFAR100
 from PIL import Image
+from tqdm.auto import tqdm
 import numpy as np
 import cv2
 
@@ -21,6 +22,8 @@ class CIFAR20(CIFAR100):
                                       download=download)
 
         self.crop = crop
+
+        print('Preparing batch data')
         if train:
             train_data = []
             train_labels = []
@@ -37,9 +40,9 @@ class CIFAR20(CIFAR100):
             # resize images
             train_data = self.train_data
             self.train_data = np.zeros((len(self.train_labels), self.img_size, self.img_size, 3))
-            for i, img in enumerate(train_data):
+            for i, img in enumerate(tqdm(train_data)):
                 img = cv2.resize(img, (self.img_size, self.img_size))
-                self.train_data[i, :] = img
+                self.train_data[i] = img
 
         else:
             test_data = []
@@ -57,9 +60,9 @@ class CIFAR20(CIFAR100):
             # resize images
             test_data = self.test_data
             self.test_data = np.zeros((len(self.test_labels), self.img_size, self.img_size, 3))
-            for i, img in enumerate(test_data):
+            for i, img in enumerate(tqdm(test_data)):
                 img = cv2.resize(img, (self.img_size, self.img_size))
-                self.test_data[i, :] = img
+                self.test_data[i] = img
 
         self.mean_image = mean_image
 

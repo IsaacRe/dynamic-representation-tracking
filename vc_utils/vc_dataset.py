@@ -182,9 +182,10 @@ def test_vc_accuracy_v2(args, network, module_name, vc_dset_train, vc_dset, devi
 def _define_VisualConceptDataset(base_dataset):
     class VisualConceptDataset(base_dataset):
 
-        def __init__(self, args, network, module_name, *dset_args, batch_size=100, device=0, store_on_gpu=False,
-                     version='1', balance=False, **dset_kwargs):
-            super(VisualConceptDataset, self).__init__(*dset_args, **dset_kwargs, crop=False)
+        def __init__(self, args, network, module_name, *dset_args, train=True, batch_size=100, device=0,
+                     store_on_gpu=False, version='1', balance=False, **dset_kwargs):
+            print('Getting VC %s dataset...' % ('train' if train else 'test'))
+            super(VisualConceptDataset, self).__init__(*dset_args, train=train, **dset_kwargs, crop=False)
             self.labeler = VCLabeler(args, network, module_name, device=device, store_on_gpu=store_on_gpu)
             self.valid_localities = None
             self.filter_weights = None
