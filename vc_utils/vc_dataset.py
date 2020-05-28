@@ -37,40 +37,98 @@ def test_threshold_acc(args, test_loader, model, layer_name, train_loader=None, 
     return labeler.test_thresholds(test_loader, *ts, train_loader=train_loader, epochs=args.vc_epochs, lr=args.lr_vc)
 
 
-def train_classification_layer_v1(args, network, module_name, vc_dset, device=0, act_tracker=None):
+def train_classification_layer_v1(args, network, module_name, vc_dset, device=0, act_tracker=None,
+                                  classification_layer=None, uniform_init=False):
     if act_tracker is None:
         act_tracker = ActivationTracker(module_names=[module_name], network=network, store_on_gpu=True)
     in_dim = act_tracker.modules[module_name].out_channels
-    classification_layer = VCLogitLayer(in_dim, vc_dset.kept_idxs).to(device)
-    bce = torch.nn.BCEWithLogitsLoss()
-    optim = torch.optim.SGD(classification_layer.parameters(), lr=args.lr_vc)
-    for i, img, valid, vc_lbl in tqdm(vc_dset.get_loader(args.batch_size_train_vc)):
-        img, vc_lbl = img.to(device), vc_lbl.to(device)
-        with act_tracker.track_all_context():
-            network(img)
-            activations = act_tracker.get_module_activations(module_name, cpu=False)
-        out = classification_layer(activations)
-        loss = bce(out[valid], vc_lbl[valid])  # only use valid localities in framing loss
-        loss.backward()
-        optim.step()
-        optim.zero_grad()
+    if classification_layer is None:
+        uniform_init = 1/512 if uniform_init else None
+        classification_layer = VCLogitLayer(in_dim, vc_dset.kept_idxs, uniform_init=uniform_init,
+                                            threshold_estimate=args.present_vc_threshold).to(device)
+
+    bce = torch.nn.BCEWithLogitsLoss(reduction='none')
+    filter_weights = None
+    weights = None
+    optim = torch.optim.Adam(classification_layer.parameters(), lr=args.lr_vc)
+    train_loader = vc_dset.get_loader(args.batch_size_train_vc)
+    pbar = tqdm(total=args.vc_epochs * len(train_loader))
+
+    """
+    # DEBUG
+    k = vc_dset.kept_idxs
+
+    def set_diag(x):
+        w = classification_layer.conv1x1.weight
+        w_ = torch.zeros_like(w)
+        w_[:, k, 0, 0] = torch.diag(torch.ones(w.shape[0]) * x).to(device)
+        w_ += (1 - x) / 512
+        w.data = w_.data
+
+    diag_vs = [0.85, 0.9, 0.95, 0.97, 0.99, 1.0, 1.1]
+    loss_initial = []
+    loss_after_epoch = []
+    new_mean = []
+    args.vc_epochs = len(diag_vs)
+    # END DEBUG"""
+
+    for e in range(args.vc_epochs):
+
+        """
+        # DEBUG
+        set_diag(diag_vs[e])
+        # END DEBUG
+        """
+
+        for i, img, valid, vc_lbl in train_loader:
+            if filter_weights is None:
+                filter_weights = vc_dset.filter_weights[None, :, None, None].repeat(vc_lbl.shape[0], 1,
+                                                                                    *vc_lbl.shape[2:]).to(device)
+                weights = torch.ones_like(filter_weights).to(device)
+            img, vc_lbl = img.to(device), vc_lbl.to(device)
+            with act_tracker.track_all_context():
+                network(img)
+                activations = act_tracker.get_module_activations(module_name, cpu=False)
+            out = classification_layer(activations)
+            loss = bce(out, vc_lbl)
+            weights[:] = 1.0
+            weights[vc_lbl == 1.0] = filter_weights[vc_lbl == 1.0]
+            loss = (loss * weights)[valid].mean()  # only use valid localities in framing loss
+            loss.backward()
+            optim.step()
+            optim.zero_grad()
+            pbar.update(1)
+
+        """
+            # DEBUG
+            loss_initial += [loss.item()]
+
+        loss_after_epoch += [loss.item()]
+        new_mean += [classification_layer.conv1x1.weight[:, k, 0, 0].diagonal().mean().item()]
+        # END DEBUG
+        """
+    pbar.close()
 
     return classification_layer
 
 
-def test_vc_accuracy_v1(args, network, module_name, vc_dset, device=0, classification_layer=None, act_tracker=None,
-                        recall=False):
+def test_vc_accuracy_v1(args, network, module_name, vc_dset_train, vc_dset_test, device=0, classification_layer=None,
+                        act_tracker=None, recall=False, train=False):
     if act_tracker is None:
         act_tracker = ActivationTracker(module_names=[module_name], network=network, store_on_gpu=True)
     if classification_layer is None:
-        #classification_layer = train_classification_layer(args, network, module_name, vc_dset,
-        #                                                  device=device, act_tracker=act_tracker)
-        in_dim = act_tracker.modules[module_name].out_channels
-        classification_layer = VCLogitLayer(in_dim, vc_dset.kept_idxs, args.present_vc_threshold).to(device)
+        if train:
+            classification_layer = train_classification_layer_v1(args, network, module_name, vc_dset_train,
+                                                                 device=device, act_tracker=act_tracker,
+                                                                 uniform_init=True)
+            classification_layer.set_vc_idxs(vc_dset_test.kept_idxs)
+        else:
+            in_dim = act_tracker.modules[module_name].out_channels
+            classification_layer = VCLogitLayer(in_dim, vc_dset_test.kept_idxs, args.present_vc_threshold).to(device)
 
-    total = np.zeros((vc_dset.total_classes,))
-    correct = np.zeros((vc_dset.total_classes,))
-    for i, img, valid, vc_lbl in tqdm(vc_dset.get_loader(args.batch_size_test_vc)):
+    total = np.zeros((vc_dset_test.total_classes,))
+    correct = np.zeros((vc_dset_test.total_classes,))
+    for i, img, valid, vc_lbl in tqdm(vc_dset_test.get_loader(args.batch_size_test_vc)):
         img, vc_lbl = img.to(device), vc_lbl.to(device)
         with act_tracker.track_all_context():
             network(img)
@@ -97,7 +155,7 @@ def test_vc_accuracy_v1(args, network, module_name, vc_dset, device=0, classific
     return correct / total * 100., classification_layer.conv1x1.weight.data.cpu()[:, :, 0, 0]
 
 
-def train_classification_layer(args, network, module_name, vc_dset, device=0, act_tracker=None,
+def train_classification_layer_v2(args, network, module_name, vc_dset, device=0, act_tracker=None,
                                uniform_init=False):
     if act_tracker is None:
         act_tracker = ActivationTracker(module_names=[module_name], network=network, store_on_gpu=True)
@@ -142,9 +200,9 @@ def test_vc_accuracy_v2(args, network, module_name, vc_dset_train, vc_dset, devi
         act_tracker = ActivationTracker(module_names=[module_name], network=network, store_on_gpu=True)
     if classification_layer is None:
         if train:
-            classification_layer = train_classification_layer(args, network, module_name, vc_dset_train,
-                                                              device=device, act_tracker=act_tracker,
-                                                              uniform_init=uniform_init)
+            classification_layer = train_classification_layer_v2(args, network, module_name, vc_dset_train,
+                                                                 device=device, act_tracker=act_tracker,
+                                                                 uniform_init=uniform_init)
             classification_layer.set_vc_idxs(vc_dset.kept_idxs)
         else:
             classification_layer = VCLogitLayerV2(None, vc_dset.kept_idxs)
@@ -184,36 +242,66 @@ def _define_VisualConceptDataset(base_dataset):
     class VisualConceptDataset(base_dataset):
 
         def __init__(self, args, network, module_name, *dset_args, train=True, batch_size=100, device=0,
-                     store_on_gpu=False, version='1', balance=False, **dset_kwargs):
+                     store_on_gpu=False, version='1', balance=False, cache=True, **dset_kwargs):
             print('Getting VC %s dataset...' % ('train' if train else 'test'))
             super(VisualConceptDataset, self).__init__(*dset_args, train=train, **dset_kwargs, crop=False)
+            self.is_train = train
             self.labeler = VCLabeler(args, network, module_name, device=device, store_on_gpu=store_on_gpu)
             self.valid_localities = None
             self.filter_weights = None
             self._prune_mask = None
             self.sorted_filters = None
+            self.save_file = 'cache/%s-vc_%s_data-%s.npz' % (args.save_all_dir.split('/')[-1],
+                                                             'train' if train else 'test',
+                                                             str(args.present_vc_threshold))
 
-            if hasattr(self, 'train_labels'):
-                labels_attr = 'train_labels'
+            if cache and exists(self.save_file):
+                self.load_cache()
             else:
-                assert hasattr(self, 'test_labels')
-                labels_attr = 'test_labels'
-            setattr(self, 'class_' + labels_attr, getattr(self, labels_attr))
-            self._prune_mask, labels, self.valid_localities, self.sorted_filters = \
-                self.labeler.label_data(self.get_loader(batch_size=batch_size, shuffle=True),
-                                        self.get_loader(batch_size=batch_size),
-                                        order_by_importance=True,
-                                        balance=balance,
-                                        save_acts=args.save_activations)
-            self.total_classes = labels.shape[1]
-            setattr(self, labels_attr, labels)
+                if train:
+                    labels_attr = 'train_labels'
+                else:
+                    assert hasattr(self, 'test_labels')
+                    labels_attr = 'test_labels'
+                setattr(self, 'class_' + labels_attr, getattr(self, labels_attr))
+                self._prune_mask, labels, self.valid_localities, self.sorted_filters = \
+                    self.labeler.label_data(self.get_loader(batch_size=batch_size, shuffle=True),
+                                            self.get_loader(batch_size=batch_size),
+                                            order_by_importance=True,
+                                            balance=balance,
+                                            save_acts=args.save_activations)
+                setattr(self, labels_attr, labels)
 
-            # get weights for positive samples for data balancing
-            ratio_positive = labels.mean(dim=0).mean(dim=1).mean(dim=1)
-            self.filter_weights = (1 - ratio_positive) / ratio_positive
+                # get weights for positive samples for data balancing
+                ratio_positive = labels.mean(dim=0).mean(dim=1).mean(dim=1)
+                self.filter_weights = (1 - ratio_positive) / ratio_positive
+
+                if cache:
+                    self.save_cache()
 
             print('\n\n A total of %d/%d filters discarded\n\n' % (len(self.pruned_idxs),
                                                                    len(self.pruned_idxs) + len(self.kept_idxs)))
+
+            if train:
+                self.total_classes = self.train_labels.shape[1]
+            else:
+                self.total_classes = self.test_labels.shape[1]
+
+        def save_cache(self):
+            np.savez(self.save_file,
+                     labels=getattr(self, 'train_labels' if self.is_train else 'test_labels').numpy(),
+                     valid_localities=self.valid_localities.numpy(),
+                     filter_weights=self.filter_weights.numpy(),
+                     prune_mask=self._prune_mask,
+                     sorted_filters=self.sorted_filters)
+
+        def load_cache(self):
+            file = np.load(self.save_file)
+            setattr(self, 'train_labels' if self.is_train else 'test_labels', file['labels'])
+            self.valid_localities = torch.Tensor(file['valid_localities']).type(torch.bool)
+            self.filter_weights = torch.Tensor(file['filter_weights'])
+            self._prune_mask = file['prune_mask']
+            self.sorted_filters = file['sorted_filters']
 
         def __getitem__(self, item):
             i, img, lbl = super(VisualConceptDataset, self).__getitem__(item)
@@ -253,20 +341,36 @@ class VCLogitLayer(torch.nn.Module):
 
     def __init__(self, in_dim, vc_idxs, threshold_estimate=0.5, uniform_init=None):
         super(VCLogitLayer, self).__init__()
-        self.conv1x1 = torch.nn.Conv2d(in_channels=in_dim, out_channels=len(vc_idxs), kernel_size=1)
+        self.conv1x1 = torch.nn.Conv2d(in_channels=in_dim, out_channels=in_dim, kernel_size=1)
+        self.vc_idxs = vc_idxs
 
         if uniform_init is None:
             # initialize layer weights with best guess under assumption that activations never change
             self.conv1x1.weight.data.zero_()
-            for i, idx in enumerate(vc_idxs):
-                self.conv1x1.weight.data[i, idx, :, :] = 1.0
+            for idx in vc_idxs:
+                self.conv1x1.weight.data[idx, idx, :, :] = 1.0
         else:
             self.conv1x1.weight.data.fill_(uniform_init)
 
         self.conv1x1.bias.data[:] = -threshold_estimate
 
     def forward(self, x):
-        return self.conv1x1(x)
+        return self.conv1x1(x)[:, self.vc_idxs]
+
+    def set_vc_idxs(self, vc_idxs):
+        self.vc_idxs = vc_idxs
+
+    @property
+    def vc_identiy(self):
+        return self.conv1x1.weight[:, self.vc_idxs, 0, 0]
+
+    @property
+    def vc_weight(self):
+        return self.conv1x1.weight[:, :, 0, 0]
+
+    @property
+    def vc_threshold(self):
+        return self.conv1x1.bias
 
 class VCLogitLayerV2(torch.nn.Module):
 
@@ -304,8 +408,9 @@ class VCLabeler:
             else None
 
         # dynamic pruning
-        self.dynamic_thresholder = ThresholdLearner(network, module_name, self.hook_manager, device, init_t,
-                                                    temperature)
+        self.dynamic_thresholder = ThresholdLearner(network, module_name, hook_manager=self.hook_manager,
+                                                    device=device, init_t=init_t,
+                                                    temperature=temperature, lr=args.lr_threshold)
         self.pruner = Pruner(network, module_name,
                              prune_ratio=args.prune_ratio,
                              load_pruned_path=self.load_pruned_path,
@@ -381,7 +486,8 @@ class VCLabeler:
 
         return present[:, kept_filters], select[:, kept_filters], discard_filters
 
-    def label_data(self, *loaders, seed=0, order_by_importance=False, balance=False, save_acts=False):
+    def label_data(self, *loaders, seed=0, order_by_importance=False, balance=False, save_acts=False,
+                   train_threshold=False):
         rand_state = np.random.get_state()
         np.random.seed(seed)
 
@@ -389,6 +495,12 @@ class VCLabeler:
 
         train_loader, loader = loaders
         np.random.set_state(rand_state)
+
+        if train_threshold:
+            print('VCLabeler: learning threshold for feature binarization...')
+            self.dynamic_thresholder.train(train_loader)
+        else:
+            print('VCLabeler: using fixed threshold of %.2f' % self.init_t)
 
         # predict feature presence
         print('VCLabeler: binarizing featuremap activations...')

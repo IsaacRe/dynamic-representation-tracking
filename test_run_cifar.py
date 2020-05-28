@@ -197,7 +197,7 @@ parser.add_argument('--validate_final_only', action='store_true', help='Exit aft
                                                                        'performed')
 parser.add_argument('--vc_epochs', type=int, default=5, help='For thresholded model accuracy validation - '
                                                              'number of epochs to finetune on binary features')
-parser.add_argument('--lr_vc', type=float, default=0.01, help='Learning rate for VC classification layer')
+parser.add_argument('--lr_vc', type=float, default=0.1, help='Learning rate for VC classification layer')
 parser.add_argument('--batch_size_train_vc', type=int, default=100, help='Batch size for training VC classification'
                                                                          ' layer')
 parser.add_argument('--batch_size_test_vc', type=int, default=100, help='Batch size for testing VC classification')
@@ -205,6 +205,8 @@ parser.add_argument('--vc_data_balance', action='store_true', help='Balance +/- 
 parser.add_argument('--vc_recall', action='store_true', help='Compute recall for VC classification performance')
 parser.add_argument('--save_activations', action='store_true', help='Store activations of the final model at the'
                                                                     ' feat_vis layer')
+parser.add_argument('--lr_threshold', type=float, default=0.1, help='Learning rate for threshold learning')
+
 
 # System options
 parser.add_argument("--test_freq", default=1, type=int,
@@ -311,12 +313,13 @@ np.random.seed(args.seed)
 # Defines transform
 transform = transforms.ColorJitter(hue=args.h_ch, saturation=args.s_ch, brightness=args.l_ch)
 
-test_set = iCIFAR100(args, root="./data",
-                             train=False,
-                             n_classes=args.num_classes,
-                             download=True,
-                             transform=None,
-                             mean_image=mean_image)
+if args.test_saved:
+    test_set = iCIFAR100(args, root="./data",
+                                 train=False,
+                                 n_classes=args.num_classes,
+                                 download=True,
+                                 transform=None,
+                                 mean_image=mean_image)
 if args.ft_fc or args.eval_threshold_acc or args.validate_multiple_thresholds:
     train_fc_set = CIFAR20(all_classes,
                            root='./data',
@@ -324,12 +327,13 @@ if args.ft_fc or args.eval_threshold_acc or args.validate_multiple_thresholds:
                            download=True,
                            transform=transform,
                            mean_image=mean_image)
-test_all_set = CIFAR20(all_classes,
-                      root='./data',
-                      train=False,
-                      download=True,
-                      transform=None,
-                      mean_image=mean_image)
+if args.ft_fc or args.eval_threshold_acc or args.validate_multiple_thresholds:
+    test_all_set = CIFAR20(all_classes,
+                          root='./data',
+                          train=False,
+                          download=True,
+                          transform=None,
+                          mean_image=mean_image)
 
 # set up running feature tracking
 if args.probe:
@@ -372,10 +376,11 @@ def test_run(device):
     test_model = None
 
     # Data loader initialization
-    test_all_loader = torch.utils.data.DataLoader(test_all_set,
-                                                  batch_size=args.batch_size_test, shuffle=False,
-                                                  num_workers=0 if args.debug else args.num_workers,
-                                                  pin_memory=True)
+    if args.ft_fc or args.eval_threshold_acc or args.validate_multiple_thresholds:
+        test_all_loader = torch.utils.data.DataLoader(test_all_set,
+                                                      batch_size=args.batch_size_test, shuffle=False,
+                                                      num_workers=0 if args.debug else args.num_workers,
+                                                      pin_memory=True)
     if args.feat_corr:
         correlation_loader = torch.utils.data.DataLoader(test_all_set,
                                                          batch_size=args.batch_size_corr, shuffle=False,
@@ -408,12 +413,12 @@ def test_run(device):
     writers = [writer]
     if args.track_vc:
         assert corr_model is not None, 'No corr_model specified for Visual Concept identification'
-        vc_dataset_test = get_vc_dataset(args, corr_model, args.feat_vis_layer_name[-1], all_classes,
-                                         balance=args.vc_data_balance,
-                                         root='./data', train=False, transform=None, mean_image=mean_image)
         vc_dataset_train = get_vc_dataset(args, corr_model, args.feat_vis_layer_name[-1], all_classes,
                                           balance=args.vc_data_balance,
                                           root='./data', train=True, transform=None, mean_image=mean_image)
+        vc_dataset_test = get_vc_dataset(args, corr_model, args.feat_vis_layer_name[-1], all_classes,
+                                         balance=args.vc_data_balance,
+                                         root='./data', train=False, transform=None, mean_image=mean_image)
         #acc, w = test_vc_accuracy(args, corr_model, args.feat_vis_layer_name[-1], vc_dataset, vc_dataset_test, device=device,
         #                          uniform_init=True, epochs=10)
 
@@ -525,8 +530,9 @@ def test_run(device):
 
             if args.track_vc:
                 print('[Test Process] Testing accuracy over visual concepts...')
-                vc_acc_, vc_weight = test_vc_accuracy_v2(args, test_model.model, vc_module_name, vc_dataset_train,
-                                                          vc_dataset_test, device=device, recall=args.vc_recall)
+                vc_acc_, vc_weight = test_vc_accuracy_v1(args, test_model.model, vc_module_name, vc_dataset_train,
+                                                          vc_dataset_test, device=device, recall=args.vc_recall,
+                                                         train=True)
                 vc_acc = {str(idx): acc for idx, acc in zip(vc_dataset_test.kept_idxs, vc_acc_)}
                 vc_writer.write(Iteration=s, **vc_acc)
                 vc_weights += [vc_weight]

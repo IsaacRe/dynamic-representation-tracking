@@ -137,7 +137,7 @@ class ThresholdLearner(ActivationTracker):
 
     #####################################################################
 
-    def train(self, loader, epochs=1, lr_network=0.01, lr_thresholds=None, threshold=True, hard=False):
+    def train(self, loader, epochs=1, lr_network=0.005, lr_thresholds=None, threshold=True, hard=False):
         """
         Fit the network's downstream layers (after thresholding is applied) to the thresholded output
         :param loader: data loader for the training data
@@ -153,7 +153,7 @@ class ThresholdLearner(ActivationTracker):
             # if training the thresholds, soft-thresholding must be used
             hard = False
 
-        net_optim = torch.optim.SGD(self.network.parameters(), lr=lr_network)
+        net_optim = torch.optim.Adam(self.network.parameters(), lr=lr_network)
         if lr_thresholds is not None and fit_threshold:
             self.set_lr(lr_thresholds)
         ce_loss = torch.nn.CrossEntropyLoss()
