@@ -10,7 +10,7 @@ from vc_utils.activation_threshold import ConvActivationThreshold
 from vc_utils.activation_tracker import ActivationTracker
 from vc_utils.prune import Pruner
 from vc_utils.hook_utils import CustomContext, HookManager
-from vc_utils.dynamic_threshold import ThresholdLearner
+from vc_utils.dynamic_threshold import ThresholdLearner, sigmoid_with_temperature
 
 DATASETS = {'ImageNet': ImageNet, 'CIFAR': CIFAR20}
 
@@ -98,22 +98,22 @@ def test_vc_accuracy_v1(args, network, module_name, vc_dset, device=0, classific
 
 
 def train_classification_layer(args, network, module_name, vc_dset, device=0, act_tracker=None,
-                               uniform_init=False, epochs=1):
+                               uniform_init=False):
     if act_tracker is None:
         act_tracker = ActivationTracker(module_names=[module_name], network=network, store_on_gpu=True)
     in_dim = act_tracker.modules[module_name].out_channels
     if not uniform_init:
-        classification_layer = VCLogitLayer(in_dim, vc_dset.kept_idxs).to(device)
+        classification_layer = VCLogitLayerV2(in_dim, vc_dset.kept_idxs).to(device)
     else:
-        classification_layer = VCLogitLayer(in_dim, vc_dset.kept_idxs, uniform_init=1 / 512).to(device)
+        classification_layer = VCLogitLayerV2(in_dim, vc_dset.kept_idxs, uniform_init=1 / 512).to(device)
     bce = torch.nn.BCEWithLogitsLoss(reduction='none')
     filter_weights = None
     weights = None
     optim = torch.optim.SGD(classification_layer.parameters(), lr=args.lr_vc)
-    test_loader = vc_dset.get_loader(args.batch_size_train_vc)
-    pbar = tqdm(total=epochs * len(test_loader))
-    for e in range(epochs):
-        for i, img, vc_lbl in test_loader:
+    train_loader = vc_dset.get_loader(args.batch_size_train_vc)
+    pbar = tqdm(total=args.vc_epochs * len(train_loader))
+    for e in range(args.vc_epochs):
+        for i, img, valid, vc_lbl in train_loader:
             if filter_weights is None:
                 filter_weights = vc_dset.filter_weights[None, :, None, None].repeat(vc_lbl.shape[0], 1,
                                                                                     *vc_lbl.shape[2:]).to(device)
@@ -123,10 +123,10 @@ def train_classification_layer(args, network, module_name, vc_dset, device=0, ac
                 network(img)
                 activations = act_tracker.get_module_activations(module_name, cpu=False)
             out = classification_layer(activations)
-            loss = bce(out, vc_lbl)  # only use valid localities in framing loss
+            loss = bce(out, vc_lbl)
             weights[:] = 1.0
             weights[vc_lbl == 1.0] = filter_weights[vc_lbl == 1.0]
-            loss = (loss * weights).mean()
+            loss = (loss * weights)[valid].mean()  # only use valid localities in framing loss
             loss.backward()
             optim.step()
             optim.zero_grad()
@@ -136,48 +136,54 @@ def train_classification_layer(args, network, module_name, vc_dset, device=0, ac
     return classification_layer
 
 
-def test_vc_accuracy(args, network, module_name, vc_dset_train, vc_dset, device=0, classification_layer=None,
-                     act_tracker=None, uniform_init=False, epochs=1, train=True, recall=False):
+def test_vc_accuracy_v2(args, network, module_name, vc_dset_train, vc_dset, device=0, classification_layer=None,
+                        act_tracker=None, uniform_init=False, epochs=1, train=True, recall=False):
     if act_tracker is None:
         act_tracker = ActivationTracker(module_names=[module_name], network=network, store_on_gpu=True)
     if classification_layer is None:
         if train:
             classification_layer = train_classification_layer(args, network, module_name, vc_dset_train,
-                                                          device=device, act_tracker=act_tracker,
-                                                          uniform_init=uniform_init, epochs=epochs)
+                                                              device=device, act_tracker=act_tracker,
+                                                              uniform_init=uniform_init)
         else:
-            classification_layer = VCLogitLayer(512, range(512)).cuda(device)
+            classification_layer = VCLogitLayerV2(None, None)
 
     total = np.zeros((vc_dset.total_classes,))
     correct = np.zeros((vc_dset.total_classes,))
-    for i, img, vc_lbl in tqdm(vc_dset.get_loader(args.batch_size_test_vc)):
+    classification_layer.eval()
+    for i, img, valid, vc_lbl in tqdm(vc_dset.get_loader(args.batch_size_test_vc)):
         img, vc_lbl = img.to(device), vc_lbl.to(device)
         with act_tracker.track_all_context():
             network(img)
             activations = act_tracker.get_module_activations(module_name, cpu=False)
         out = classification_layer(activations)
         pred = torch.sigmoid(out).round()
+        pred[~valid] = -1.  # only consider correct predictions among valid localities
         correct_mask = (pred == vc_lbl)
+
         if recall:
             # Only care about correctly classified instances where the label is 1
-            correct += (correct_mask.type(torch.float) * vc_lbl).sum(dim=0).sum(dim=1).sum(dim=1).cpu().numpy()
+            correct += (correct_mask.type(torch.float) * vc_lbl).sum(dim=0).sum(dim=1).sum(dim=1).type(
+                torch.int).cpu().numpy()
 
-            # Get total number of positive data points for each vc class
-            total += vc_lbl.sum(dim=0).sum(dim=1).sum(dim=1).cpu().numpy()
+            # Get total number of positive, valid data points
+            total_ = vc_lbl * valid.type(torch.float).to(device)
+            total_ = total_.sum(dim=0).sum(dim=1).sum(dim=1)
+            total += total_.type(torch.int).cpu().numpy()
         else:
             correct += correct_mask.sum(dim=0).sum(dim=1).sum(dim=1).cpu().numpy()
 
-            # Get total number of data points for each vc class
-            total += np.array([vc_lbl.transpose(1, 0).flatten(start_dim=1, end_dim=3).shape[1]] * vc_dset.total_classes)
+            # Get total number of valid data points for each vc class
+            total += valid.transpose(1, 0).flatten(start_dim=1, end_dim=3).sum(dim=1).cpu().numpy()
 
-    return correct / total * 100., classification_layer.conv1x1.weight.data.cpu()[:, :, 0, 0]
+    return correct / total * 100., classification_layer.threshold.data.cpu()
 
 
 def _define_VisualConceptDataset(base_dataset):
     class VisualConceptDataset(base_dataset):
 
         def __init__(self, args, network, module_name, *dset_args, batch_size=100, device=0, store_on_gpu=False,
-                     version='2.0', balance=False, **dset_kwargs):
+                     version='1', balance=False, **dset_kwargs):
             super(VisualConceptDataset, self).__init__(*dset_args, **dset_kwargs, crop=False)
             self.labeler = VCLabeler(args, network, module_name, device=device, store_on_gpu=store_on_gpu)
             self.valid_localities = None
@@ -185,38 +191,24 @@ def _define_VisualConceptDataset(base_dataset):
             self._prune_mask = None
             self.sorted_filters = None
 
-            if version == '2.0':
-                if hasattr(self, 'train_labels'):
-                    labels_attr = 'train_labels'
-                else:
-                    assert hasattr(self, 'test_labels')
-                    labels_attr = 'test_labels'
-                setattr(self, 'class_' + labels_attr, getattr(self, labels_attr))
-                self._prune_mask, labels, self.valid_localities, self.sorted_filters = \
-                    self.labeler.label_data(self.get_loader(batch_size=batch_size, shuffle=True),
-                                            self.get_loader(batch_size=batch_size),
-                                            order_by_importance=True,
-                                            balance=balance,
-                                            save_acts=args.save_activations)
-                self.total_classes = labels.shape[1]
-                setattr(self, labels_attr, labels)
-
-                # get weights for positive samples for data balancing
-                ratio_positive = labels.mean(dim=0).mean(dim=1).mean(dim=1)
-                self.filter_weights = (1 - ratio_positive) / ratio_positive
-
+            if hasattr(self, 'train_labels'):
+                labels_attr = 'train_labels'
             else:
-                # old code version 1.0
-                if hasattr(self, 'train_labels'):
-                    self.class_train_labels = self.train_labels
-                    self._prune_mask, self.train_labels, self.valid_localities = \
-                        self.labeler.label_data(self.get_loader(batch_size=batch_size))
-                    self.total_classes = self.train_labels.shape[1]
-                if hasattr(self, 'test_labels'):
-                    self.class_test_labels = self.test_labels
-                    self._prune_mask, self.test_labels, self.valid_localities = \
-                        self.labeler.label_data(self.get_loader(batch_size=batch_size))
-                    self.total_classes = self.test_labels.shape[1]
+                assert hasattr(self, 'test_labels')
+                labels_attr = 'test_labels'
+            setattr(self, 'class_' + labels_attr, getattr(self, labels_attr))
+            self._prune_mask, labels, self.valid_localities, self.sorted_filters = \
+                self.labeler.label_data(self.get_loader(batch_size=batch_size, shuffle=True),
+                                        self.get_loader(batch_size=batch_size),
+                                        order_by_importance=True,
+                                        balance=balance,
+                                        save_acts=args.save_activations)
+            self.total_classes = labels.shape[1]
+            setattr(self, labels_attr, labels)
+
+            # get weights for positive samples for data balancing
+            ratio_positive = labels.mean(dim=0).mean(dim=1).mean(dim=1)
+            self.filter_weights = (1 - ratio_positive) / ratio_positive
 
             print('\n\n A total of %d/%d filters discarded\n\n' % (len(self.pruned_idxs),
                                                                    len(self.pruned_idxs) + len(self.kept_idxs)))
@@ -274,11 +266,24 @@ class VCLogitLayer(torch.nn.Module):
     def forward(self, x):
         return self.conv1x1(x)
 
+class VCLogitLayerV2(torch.nn.Module):
+
+    def __init__(self, in_dim, vc_idxs, threshold_estimate=0.5, uniform_init=None, temperature=1.0):
+        super(VCLogitLayerV2, self).__init__()
+        self.threshold = torch.nn.Parameter(torch.zeros(1).fill_(threshold_estimate))
+        self.vc_idxs = vc_idxs
+
+    def forward(self, x):
+        return x[:, self.vc_idxs] - self.threshold
+
+    def parameters(self):
+        return [self.threshold]
+
 
 class VCLabeler:
 
     def __init__(self, args, network, module_name, store_on_gpu=False, device=0,
-                 init_t=0.5, temperature=0.2, version='2.0'):
+                 init_t=0.5, temperature=0.2):
         init_t = args.present_vc_threshold
         self.layer_name = module_name
         self.init_t = init_t
@@ -290,35 +295,33 @@ class VCLabeler:
         self.device = device
         self.hook_manager = HookManager()
         self.network = network
-        self.version = version
         self.load_pruned_path = args.load_pruned_path if exists(args.load_pruned_path) and args.load_prune_mask \
             else None
 
         # dynamic pruning
-        if version == '2.0':
-            self.dynamic_thresholder = ThresholdLearner(network, module_name, self.hook_manager, device, init_t,
-                                                        temperature)
-            self.pruner = Pruner(network, module_name,
-                                 prune_ratio=args.prune_ratio,
-                                 load_pruned_path=self.load_pruned_path,
-                                 store_on_gpu=store_on_gpu,
-                                 save_pruned_path=args.save_pruned_path,
-                                 hook_manager=self.hook_manager)
+        self.dynamic_thresholder = ThresholdLearner(network, module_name, self.hook_manager, device, init_t,
+                                                    temperature)
+        self.pruner = Pruner(network, module_name,
+                             prune_ratio=args.prune_ratio,
+                             load_pruned_path=self.load_pruned_path,
+                             store_on_gpu=store_on_gpu,
+                             save_pruned_path=args.save_pruned_path,
+                             hook_manager=self.hook_manager)
 
-        # threshold pruning
-        else:
-            self.thresholder = ConvActivationThreshold(network, module_name,
-                                                       store_on_gpu=store_on_gpu,
-                                                       hook_manager=self.hook_manager)
-            self.pruner = Pruner(network, module_name,
-                                 prune_ratio=args.prune_ratio,
-                                 load_pruned_path=self.load_pruned_path,
-                                 store_on_gpu=store_on_gpu,
-                                 save_pruned_path=args.save_pruned_path,
-                                 hook_manager=self.hook_manager)
-            self.act_tracker = ActivationTracker(module_names=[module_name], network=network,
-                                                 store_on_gpu=store_on_gpu,
-                                                 hook_manager=self.hook_manager)
+        """# threshold pruning
+        self.thresholder = ConvActivationThreshold(network, module_name,
+                                                   store_on_gpu=store_on_gpu,
+                                                   hook_manager=self.hook_manager)
+        self.pruner = Pruner(network, module_name,
+                             prune_ratio=args.prune_ratio,
+                             load_pruned_path=self.load_pruned_path,
+                             store_on_gpu=store_on_gpu,
+                             save_pruned_path=args.save_pruned_path,
+                             hook_manager=self.hook_manager)
+        self.act_tracker = ActivationTracker(module_names=[module_name], network=network,
+                                             store_on_gpu=store_on_gpu,
+                                             hook_manager=self.hook_manager)
+        """
 
     def test_thresholds(self, test_loader, *ts, train_loader=None, epochs=5, lr=0.01, test_full=True):
         accs = []
@@ -379,107 +382,43 @@ class VCLabeler:
 
         self.network.to(self.device)
 
-        if self.version == '2.0':
-            train_loader, loader = loaders
-            np.random.set_state(rand_state)
+        train_loader, loader = loaders
+        np.random.set_state(rand_state)
 
-            #TODO experiments
-            if test_threshold_acc is not None:
-                accs = []
-                torch.save(self.network.state_dict(), 'temp.pth')
-                def reload_params():
-                    self.network.load_state_dict(torch.load('temp.pth'))
+        # predict feature presence
+        print('VCLabeler: binarizing featuremap activations...')
+        raw_activations, binary_activations = self.dynamic_thresholder.predict(loader,
+                                                                               output_raw=order_by_importance)
+        if save_acts:
+            np.save('%s-activations.npy' % self.layer_name, raw_activations.flatten().numpy())
 
-            # 0 No train test on t=1.0
-            reload_params()
-            self.dynamic_thresholder.fill_thresholds(1.0)
-            accs += [self.dynamic_thresholder.test(loader, hard=True)]
+        print('VCLabeler: Discarding filters with insufficient positive localities')
 
-            # 1 No train test on t=1.5
-            reload_params()
-            self.dynamic_thresholder.fill_thresholds(1.5)
-            accs += [self.dynamic_thresholder.test(loader, hard=True)]
+        labels = binary_activations
 
-            # 2: Control, 5 epochs training - no thresholding
-            reload_params()
-            self.dynamic_thresholder.train(train_loader, epochs=3, lr_network=0.01, threshold=False)
-            accs += [self.dynamic_thresholder.test(loader, threshold=False)]
-
-            # 3: Train on hard threshold (fixed, threshold=0.5)
-            reload_params()
-            self.dynamic_thresholder.fill_thresholds(0.5)
-            self.dynamic_thresholder.train(train_loader, epochs=3, lr_network=0.01, lr_thresholds=0, hard=True)
-            accs += [self.dynamic_thresholder.test(loader, hard=True)]
-
-            # 4: Train on soft threshold (fixed, threshold=0.5)
-            reload_params()
-            self.dynamic_thresholder.fill_thresholds(0.5)
-            self.dynamic_thresholder.train(train_loader, epochs=3, lr_network=0.01, lr_thresholds=0, hard=False)
-            accs += [self.dynamic_thresholder.test(loader, hard=True)]
-
-            # 5: Train on hard threshold (fixed, threshold=1.0)
-            reload_params()
-            self.dynamic_thresholder.fill_thresholds(1.0)
-            self.dynamic_thresholder.train(train_loader, epochs=3, lr_network=0.01, lr_thresholds=0, hard=True)
-            accs += [self.dynamic_thresholder.test(loader, hard=True)]
-
-            # 6: Train on soft threshold (fixed, threshold=1.0)
-            reload_params()
-            self.dynamic_thresholder.fill_thresholds(1.0)
-            self.dynamic_thresholder.train(train_loader, epochs=3, lr_network=0.01, lr_thresholds=0, hard=False)
-            accs += [self.dynamic_thresholder.test(loader, hard=True)]
-
-            # 7: Train on hard threshold (fixed, threshold=1.5)
-            reload_params()
-            self.dynamic_thresholder.fill_thresholds(1.5)
-            self.dynamic_thresholder.train(train_loader, epochs=3, lr_network=0.01, lr_thresholds=0, hard=True)
-            accs += [self.dynamic_thresholder.test(loader, hard=True)]
-
-            # 8: Train on soft threshold (fixed, threshold=1.5)
-            reload_params()
-            self.dynamic_thresholder.fill_thresholds(1.5)
-            self.dynamic_thresholder.train(train_loader, epochs=3, lr_network=0.01, lr_thresholds=0, hard=False)
-            accs += [self.dynamic_thresholder.test(loader, hard=True)]
-            np.save('experiments-temp.npy', np.array(accs))
-
-            # train thresholds
-            #self.dynamic_thresholder.train(train_loader, epochs=3, lr_network=0.01, fit_threshold=False,
-            #                               hard_threshold=True)
-            
-            #self.dynamic_thresholder.fill_thresholds(0.5)
-
-            # test performance
-            #self.dynamic_thresholder.test(loader, threshold=False)
-
-            # predict feature presence
-            raw_activations, binary_activations = self.dynamic_thresholder.predict(loader,
-                                                                                   output_raw=order_by_importance)
-
-            if save_acts:
-                np.save('%s-activations.npy' % self.layer_name, raw_activations.flatten().numpy())
-
-            labels = binary_activations
-
-            discard_filter_mask = None
-            if balance:
-                labels, select, discard_filters = self.get_balanced_data_mask(labels, -(labels - 1), 1000)
-            else:
-                labels, _, discard_filters = self.get_balanced_data_mask(labels, -(labels - 1), 1000)
-                select = torch.ones_like(labels).type(torch.bool)
-            if len(discard_filters) > 0:
-                discard_filter_mask = np.zeros(binary_activations.shape[1]).astype(np.bool_)
-                discard_filter_mask[(np.array(list(discard_filters)),)] = True
-
-            # arrange VCs by filter importance
-            sorted_filters = None
-            if order_by_importance:
-                importances, sorted_importances = self.pruner.sort_filter_activations_by_metric(raw_activations)
-                sorted_filters = np.array([filter_idx for importance, filter_idx in sorted_importances])
-
-            return discard_filter_mask, labels, select, sorted_filters
-
+        discard_filter_mask = None
+        if balance:
+            labels, select, discard_filters = self.get_balanced_data_mask(labels, -(labels - 1), 1000)
         else:
-            loader, = loaders
+            labels, _, discard_filters = self.get_balanced_data_mask(labels, -(labels - 1), 1000)
+            select = torch.ones_like(labels).type(torch.bool)
+        if len(discard_filters) > 0:
+            discard_filter_mask = np.zeros(binary_activations.shape[1]).astype(np.bool_)
+            discard_filter_mask[(np.array(list(discard_filters)),)] = True
+
+        print('VCLabeler: Sorting remaining filters')
+
+        # arrange VCs by filter importance
+        sorted_filters = None
+        if order_by_importance:
+            importances, sorted_importances = self.pruner.sort_filter_activations_by_metric(raw_activations)
+            sorted_filters = np.array([filter_idx for importance, filter_idx in sorted_importances])
+
+        print('VC labeling finished.')
+
+        return discard_filter_mask, labels, select, sorted_filters
+
+        """ loader, = loaders
             activations = self.act_tracker.compute_activations_from_data(loader, device=self.device)
             if not self.load_prune_mask or not self.load_pruned_path:
                 self.pruner.compute_prune_mask_from_activations(activations, save=self.save_prune_mask)
@@ -505,6 +444,7 @@ class VCLabeler:
                 self.pruner.prune_mask[self.layer_name][kept_filters[np.array(list(discard_filters))]] = True
 
             return self.pruner.prune_mask[self.layer_name], labels, select_data
+        """
 
 
 VisualConceptDataset = NullVisualConceptDataset

@@ -23,7 +23,8 @@ from csv_writer import CSVWriter
 from feature_matching import match, between_net_correlation
 from feature_vis_2 import PatchTracker
 from feature_generalizability import ANOVATracker
-from vc_utils.vc_dataset import set_base_dataset, get_vc_dataset, test_vc_accuracy_v1, test_threshold_acc
+from vc_utils.vc_dataset import set_base_dataset, get_vc_dataset, test_vc_accuracy_v1, test_vc_accuracy_v2,\
+    test_threshold_acc
 from vc_utils.activation_tracker import ActivationTracker
 set_base_dataset('CIFAR')
 
@@ -410,13 +411,16 @@ def test_run(device):
         vc_dataset_test = get_vc_dataset(args, corr_model, args.feat_vis_layer_name[-1], all_classes,
                                          balance=args.vc_data_balance,
                                          root='./data', train=False, transform=None, mean_image=mean_image)
+        vc_dataset_train = get_vc_dataset(args, corr_model, args.feat_vis_layer_name[-1], all_classes,
+                                          balance=args.vc_data_balance,
+                                          root='./data', train=True, transform=None, mean_image=mean_image)
         #acc, w = test_vc_accuracy(args, corr_model, args.feat_vis_layer_name[-1], vc_dataset, vc_dataset_test, device=device,
         #                          uniform_init=True, epochs=10)
 
         vc_writer = CSVWriter(vc_save_file + '.csv', 'Iteration', *(str(idx) for idx in vc_dataset_test.kept_idxs))
         writers += [vc_writer]
-        if vc_dataset_test.sorted_filters is not None:
-            np.save('%s-sorted_filters.npy' % args.outfile.split('.')[0], vc_dataset_test.sorted_filters)
+        np.savez('%s-coverage.npz' % vc_save_file, kept_idxs=vc_dataset_test.kept_idxs,
+                 sorted_filters=vc_dataset_test.sorted_filters)
 
     vc_weights = []
     ft_accs = []
@@ -521,7 +525,7 @@ def test_run(device):
 
             if args.track_vc:
                 print('[Test Process] Testing accuracy over visual concepts...')
-                vc_acc_, vc_weight = test_vc_accuracy_v1(args, test_model.model, vc_module_name,
+                vc_acc_, vc_weight = test_vc_accuracy_v2(args, test_model.model, vc_module_name, vc_dataset_train,
                                                           vc_dataset_test, device=device, recall=args.vc_recall)
                 vc_acc = {str(idx): acc for idx, acc in zip(vc_dataset_test.kept_idxs, vc_acc_)}
                 vc_writer.write(Iteration=s, **vc_acc)

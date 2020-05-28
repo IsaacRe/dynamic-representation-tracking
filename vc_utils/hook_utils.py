@@ -1,4 +1,5 @@
 import torch
+from tqdm.auto import tqdm
 
 
 def increment_name(name):
@@ -32,7 +33,7 @@ def data_pass(loader, network=None, device=0, gradient=True, loss_fn=torch.nn.Cr
         context = torch.no_grad()
 
     with context:
-        for i, x, y in loader:
+        for i, x, y in tqdm(loader):
             x, y = x.to(device), y.to(device)
             out = network(x)
             if gradient:
