@@ -30,38 +30,25 @@ class ThresholdLearner(ActivationTracker):
 
         self.cache_thresholded_activations = False
         self.thresholded_activations = []
-        self.thresholds = None
+        self.threshold = torch.nn.Parameter(torch.zeros(1).fill_(init_t).to(device))
         self.lr = lr
-        self.t_optim = None
+        self.t_optim = torch.optim.SGD([self.threshold], lr=lr)
 
     def reset_all_activations(self):
         super(ThresholdLearner, self).reset_all_activations()
         self.thresholded_activations = []
         self.cache_thresholded_activations = False
 
-    def init_thresholds(self, shape):
-        self.thresholds = torch.nn.Parameter(torch.zeros(shape[1]).fill_(self.init_t).to(self.device))
-
-    def init_optim(self):
-        assert self.thresholds is not None
-        self.t_optim = torch.optim.SGD([self.thresholds], lr=self.lr)
-
-    def init_all(self, shape):
-        self.init_thresholds(shape)
-        self.init_optim()
-
-    def fill_thresholds(self, t):
+    def set_threshold(self, t):
         self.init_t = t
-        if self.thresholds is not None:
-            self.thresholds.data.fill_(t)
+        self.threshold.data.fill_(t)
 
     def set_lr(self, lr):
         self.lr = lr
-        if self.thresholds is not None:
-            self.init_optim()
+        self.t_optim = torch.optim.SGD([self.threshold], lr=lr)
 
     def threshold_activations_gumbel(self, activations, hard=False):
-        logits = activations - self.thresholds[None, :, None, None]
+        logits = activations - self.threshold
         if hard:
             ret = logits.clone()
             ret[logits >= 0] = 1.0
@@ -70,7 +57,7 @@ class ThresholdLearner(ActivationTracker):
         return gumbel_softmax_binary(logits, self.temperature, device=self.device)
 
     def threshold_activations(self, activations, hard=False):
-        logits = activations - self.thresholds[None, :, None, None]
+        logits = activations - self.threshold
         if hard:
             ret = logits.clone()
             ret[logits >= 0] = 1.0
@@ -113,8 +100,6 @@ class ThresholdLearner(ActivationTracker):
         return out.detach()
 
     def base_threshold_hook(self, module, inp, out, hard=False):
-        if self.thresholds is None:
-            self.init_all(out.shape)
         acts = self.threshold_activations(out.detach(), hard=hard)
         if self.cache_thresholded_activations:
             self.thresholded_activations += [acts.data.clone().cpu()]
@@ -149,25 +134,6 @@ class ThresholdLearner(ActivationTracker):
         # ensure predict_hook is activated after track_hook so the non-threhsolded activations are recorded
         hooks += [t_hook]
         return self.hook_manager.hook_all_context(hook_types=hooks, add_exit_fns=exit_fns)
-
-    def training_context(self, threshold=True):
-        return self.hook_manager.hook_all_context(hook_types=[self.training_hook])
-
-    def predict_context(self, cache_binary_acts=False, cache_raw_acts=False, save=False, reset=True):
-        hooks = []
-        exit_fns = []
-        if cache_raw_acts:
-            hooks += [self.track_hook]
-            if save:
-                exit_fns += [self.save_activations]
-        exit_fns += [self.reset_all_activations]
-
-        # ensure predict_hook is activated after track_hook so the non-threhsolded activations are recorded
-        self.cache_binary_activations = cache_binary_acts
-        hooks += [self.predict_hook]
-
-        return self.hook_manager.hook_all_context(hook_types=hooks,
-                                                  add_exit_fns=exit_fns)
 
     #####################################################################
 
@@ -207,7 +173,6 @@ class ThresholdLearner(ActivationTracker):
                     net_optim.step()
                     net_optim.zero_grad()
                     if fit_threshold:
-                        assert self.t_optim is not None
                         self.t_optim.step()
                         self.t_optim.zero_grad()
 
@@ -233,9 +198,10 @@ class ThresholdLearner(ActivationTracker):
         return correct / total * 100.
 
     def predict(self, loader, output_raw=False):
-        with self.threshold_context(hard=True, cache_thresholded_acts=True, cache_raw_acts=output_raw):
-            data_pass(loader, self.network, device=self.device, gradient=False)
-            raw = None
-            if output_raw:
-                raw = self.get_module_activations(self.module_name)
-            return raw, self.get_thresholded_activations()
+        with torch.no_grad():
+            with self.threshold_context(hard=True, cache_thresholded_acts=True, cache_raw_acts=output_raw):
+                data_pass(loader, self.network, device=self.device, gradient=False)
+                raw = None
+                if output_raw:
+                    raw = self.get_module_activations(self.module_name)
+                return raw, self.get_thresholded_activations()

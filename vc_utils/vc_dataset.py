@@ -145,8 +145,9 @@ def test_vc_accuracy_v2(args, network, module_name, vc_dset_train, vc_dset, devi
             classification_layer = train_classification_layer(args, network, module_name, vc_dset_train,
                                                               device=device, act_tracker=act_tracker,
                                                               uniform_init=uniform_init)
+            classification_layer.set_vc_idxs(vc_dset.kept_idxs)
         else:
-            classification_layer = VCLogitLayerV2(None, None)
+            classification_layer = VCLogitLayerV2(None, vc_dset.kept_idxs)
 
     total = np.zeros((vc_dset.total_classes,))
     correct = np.zeros((vc_dset.total_classes,))
@@ -272,6 +273,9 @@ class VCLogitLayerV2(torch.nn.Module):
     def __init__(self, in_dim, vc_idxs, threshold_estimate=0.5, uniform_init=None, temperature=1.0):
         super(VCLogitLayerV2, self).__init__()
         self.threshold = torch.nn.Parameter(torch.zeros(1).fill_(threshold_estimate))
+        self.vc_idxs = vc_idxs
+
+    def set_vc_idxs(self, vc_idxs):
         self.vc_idxs = vc_idxs
 
     def forward(self, x):
