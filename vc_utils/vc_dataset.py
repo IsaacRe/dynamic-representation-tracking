@@ -56,7 +56,7 @@ def train_classification_layer_v1(args, network, module_name, vc_dset, device=0,
     weights = None
     optim = torch.optim.Adam(classification_layer.parameters(), lr=args.lr_vc)
     train_loader = vc_dset.get_loader(args.batch_size_train_vc)
-    pbar = tqdm(total=args.vc_epochs * len(train_loader))
+    pbar = tqdm(len(train_loader))
 
     """
     # DEBUG
