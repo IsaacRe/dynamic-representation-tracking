@@ -437,7 +437,7 @@ def test_run(device):
 
     test_wait_time = 0
     with ContextMerger(*writers):
-        for s in load_iters:
+        for iter_i, s in enumerate(load_iters):
 
             prev_model = None
             if s > 0:
@@ -481,7 +481,8 @@ def test_run(device):
                                                     train_loader=train_loader, ts=[args.present_vc_threshold])
                 ft_accs += [ft_acc]
                 bin_ft_accs += [t_acc]
-                np.savez('%s-bin-acc.npz' % args.outfile.split('.')[0], iteration=s, baseline=np.stack(ft_accs),
+                np.savez('%s-bin-acc.npz' % args.outfile.split('.')[0], iteration=np.stack(load_iters[:iter_i+1]),
+                         baseline=np.stack(ft_accs),
                          **{str(args.present_vc_threshold): np.stack(bin_ft_accs)})
 
             ############################# Test Accuracy (Seen Classes) ######################################
