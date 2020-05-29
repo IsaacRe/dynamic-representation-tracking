@@ -539,7 +539,7 @@ def test_run(device):
                 print('[Test Process] Testing accuracy over visual concepts...')
                 vc_acc_, vc_weight = test_vc_accuracy_v1(args, test_model.model, vc_module_name, vc_dataset_train,
                                                           vc_dataset_test, device=device, recall=args.vc_recall,
-                                                         train=True)
+                                                         train=True, uniform_init=True)
                 vc_acc = {str(idx): acc for idx, acc in zip(vc_dataset_test.kept_idxs, vc_acc_)}
                 vc_writer.write(Iteration=s, **vc_acc)
                 vc_weights += [vc_weight]

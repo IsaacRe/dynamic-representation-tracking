@@ -1,4 +1,6 @@
 from os.path import exists
+import os
+from time import time
 import torchvision
 import torchvision.transforms as transforms
 import torch
@@ -35,14 +37,15 @@ def test_threshold_acc(args, test_loader, model, layer_name, train_loader=None, 
 
     labeler = VCLabeler(args, model, layer_name, device=device)
     return labeler.test_thresholds(test_loader, *ts, train_loader=train_loader, epochs=args.vc_epochs,
-                                   lr=args.lr_threshold)
+                                   epochs_ft=args.ft_fc_epochs,
+                                   lr=args.lr_threshold, lr_ft=args.ft_fc_lr)
 
 
 def train_classification_layer_v1(args, network, module_name, vc_dset, device=0, act_tracker=None,
                                   classification_layer=None, uniform_init=False):
     if act_tracker is None:
         act_tracker = ActivationTracker(module_names=[module_name], network=network, store_on_gpu=True)
-    in_dim = act_tracker.modules[module_name].out_channels
+    in_dim = 512
     if classification_layer is None:
         uniform_init = 1/512 if uniform_init else None
         classification_layer = VCLogitLayer(in_dim, vc_dset.kept_idxs, uniform_init=uniform_init,
@@ -72,8 +75,8 @@ def train_classification_layer_v1(args, network, module_name, vc_dset, device=0,
     new_mean = []
     args.vc_epochs = len(diag_vs)
     # END DEBUG"""
-
-    for e in range(args.vc_epochs):
+    num_epochs = 1
+    for e in range(num_epochs):
 
         """
         # DEBUG
@@ -114,17 +117,17 @@ def train_classification_layer_v1(args, network, module_name, vc_dset, device=0,
 
 
 def test_vc_accuracy_v1(args, network, module_name, vc_dset_train, vc_dset_test, device=0, classification_layer=None,
-                        act_tracker=None, recall=False, train=False):
+                        act_tracker=None, recall=False, train=False, uniform_init=False):
     if act_tracker is None:
         act_tracker = ActivationTracker(module_names=[module_name], network=network, store_on_gpu=True)
     if classification_layer is None:
         if train:
             classification_layer = train_classification_layer_v1(args, network, module_name, vc_dset_train,
                                                                  device=device, act_tracker=act_tracker,
-                                                                 uniform_init=True)
+                                                                 uniform_init=uniform_init)
             classification_layer.set_vc_idxs(vc_dset_test.kept_idxs)
         else:
-            in_dim = act_tracker.modules[module_name].out_channels
+            in_dim = 512
             classification_layer = VCLogitLayer(in_dim, vc_dset_test.kept_idxs, args.present_vc_threshold).to(device)
 
     total = np.zeros((vc_dset_test.total_classes,))
@@ -424,12 +427,23 @@ class VCLabeler:
                              save_pruned_path=args.save_pruned_path,
                              hook_manager=self.hook_manager)
 
-    def test_thresholds(self, test_loader, *ts, train_loader=None, epochs=5, lr=0.01, test_full=True):
+    def test_thresholds(self, test_loader, *ts, train_loader=None, epochs=5, epochs_ft=5, lr=0.01, lr_ft=0.02,
+                        test_full=True):
         accs = []
-        torch.save(self.network.state_dict(), 'temp.pth')
+        self.network.cpu()
+
+        def make_tmp_file():
+            return 'tmp/%s' % str(np.random.rand()).split('.')[-1]
+
+        tmp_file = make_tmp_file()
+        while exists(tmp_file):
+            tmp_file = make_tmp_file()
+        torch.save(self.network.state_dict(), tmp_file)
 
         def reload_params():
-            self.network.load_state_dict(torch.load('temp.pth'))
+            self.network.cpu()
+            self.network.load_state_dict(torch.load(tmp_file))
+            self.network.cuda(self.device)
 
         for t in ts:
             reload_params()
@@ -445,10 +459,11 @@ class VCLabeler:
             reload_params()
             if train_loader is not None:
                 self.network.train()
-                self.dynamic_thresholder.train(train_loader, epochs=epochs, lr_network=lr, threshold=False)
+                self.dynamic_thresholder.train(train_loader, epochs=epochs, lr_network=lr_ft, threshold=False)
             self.network.eval()
             ft_acc = self.dynamic_thresholder.test(test_loader, threshold=False)
 
+        os.remove(tmp_file)
         return accs, ft_acc
 
     @staticmethod
