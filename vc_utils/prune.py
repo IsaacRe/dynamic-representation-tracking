@@ -1,4 +1,5 @@
 import numpy as np
+from tqdm.auto import tqdm
 import torch
 from vc_utils.activation_tracker import ActivationTracker
 from vc_utils.hook_utils import find_network_modules_by_name
@@ -31,7 +32,7 @@ class Pruner(ActivationTracker):
         out = out.clone()
         if prune_mask is not None:
             if keep_shape:
-                out[:, prune_mask[module_name]] = 0.
+                out[:, prune_mask] = 0.
             else:
                 out = out[:, np.bitwise_not(prune_mask)]
 
@@ -57,6 +58,9 @@ class Pruner(ActivationTracker):
     def sort_filter_activations_by_metric(self, activations):
         metric = self.compute_variance(self.flatten_activations(activations))
         return metric, sorted([(v, i) for i, v in enumerate(metric)], reverse=True)
+
+    def set_prune_mask(self, m, mask):
+        self.prune_mask[m] = mask
 
     def compute_prune_mask_from_activations(self, activations, prune_ratio=None, save=False):
         if prune_ratio is None:
@@ -99,3 +103,34 @@ class Pruner(ActivationTracker):
 
     def prune_all_context(self):
         return self.hook_manager.hook_all_context(hook_types=[self.prune_hook])
+
+    #########################  Feature Sensitivity Analysis  ###################################
+
+    def test_features(self, loader, layer_name, device=0):
+        n_features = 512
+        n_tests = n_features + 1
+        f_ablation_scores = np.zeros(n_features)
+
+        # iteratively test model accuracy for pruning of each feature node individually
+        pbar = tqdm(total=n_tests * len(loader))
+        for f in range(-1, n_features):
+            total = correct = 0
+
+            # set up pruning for current feature output
+            prune_mask = np.zeros(512).astype(np.bool_)
+            if f >= 0:
+                prune_mask[f] = True
+            self.set_prune_mask(layer_name, prune_mask)
+            with torch.no_grad():
+                with self.prune_all_context():
+                    for i, x, y in loader:
+                        x, y = x.to(device), y.to(device)
+                        out = self.network(x)
+                        correct += (out.argmax(dim=1) == y).sum().cpu().numpy()
+                        total += len(y)
+
+                        pbar.update(1)
+
+                f_ablation_scores[f] = correct / total
+
+        return f_ablation_scores

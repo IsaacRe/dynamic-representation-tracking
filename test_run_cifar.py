@@ -1,4 +1,4 @@
-from model import IncrNet
+from model import IncrNet, sort_fc
 import cv2
 from copy import deepcopy
 import torch
@@ -24,7 +24,7 @@ from feature_matching import match, between_net_correlation
 from feature_vis_2 import PatchTracker
 from feature_generalizability import ANOVATracker
 from vc_utils.vc_dataset import set_base_dataset, get_vc_dataset, test_vc_accuracy_v1, test_vc_accuracy_v2,\
-    test_threshold_acc
+    test_threshold_acc, test_features
 from vc_utils.activation_tracker import ActivationTracker
 set_base_dataset('CIFAR')
 
@@ -193,7 +193,7 @@ parser.add_argument('--thresholds_to_validate', type=float, nargs='*', default=[
                     help='Threshold values for binary features on which to validate accuracy of final model')
 parser.add_argument('--eval_threshold_acc', action='store_true', help='Evaluate accuracy of the thresholded model '
                                                                       'during each exposure')
-parser.add_argument('--validate_final_only', action='store_true', help='Exit after final model validation has been '
+parser.add_argument('--eval_final_only', action='store_true', help='Exit after final model validation has been '
                                                                        'performed')
 parser.add_argument('--vc_epochs', type=int, default=5, help='For thresholded model accuracy validation - '
                                                              'number of epochs to finetune on binary features')
@@ -207,6 +207,8 @@ parser.add_argument('--save_activations', action='store_true', help='Store activ
                                                                     ' feat_vis layer')
 parser.add_argument('--lr_threshold', type=float, default=0.04, help='Learning rate for threshold learning')
 
+# feature ablation analysis
+parser.add_argument('--feature_ablation', action='store_true', help='Perform feature ablation analysis')
 
 parser.add_argument('--resume_iter', type=int, default=None, help='Specify iteration to start testing from')
 
@@ -331,7 +333,7 @@ if args.ft_fc or args.eval_threshold_acc or args.validate_multiple_thresholds:
                            download=True,
                            transform=transform,
                            mean_image=mean_image)
-if args.ft_fc or args.eval_threshold_acc or args.validate_multiple_thresholds:
+if args.ft_fc or args.eval_threshold_acc or args.validate_multiple_thresholds or args.feature_ablation:
     test_all_set = CIFAR20(all_classes,
                           root='./data',
                           train=False,
@@ -380,7 +382,7 @@ def test_run(device):
     test_model = None
 
     # Data loader initialization
-    if args.ft_fc or args.eval_threshold_acc or args.validate_multiple_thresholds:
+    if args.ft_fc or args.eval_threshold_acc or args.validate_multiple_thresholds or args.feature_ablation:
         test_all_loader = torch.utils.data.DataLoader(test_all_set,
                                                       batch_size=args.batch_size_test, shuffle=False,
                                                       num_workers=0 if args.debug else args.num_workers,
@@ -396,11 +398,12 @@ def test_run(device):
                                                    num_workers=0 if args.debug else args.num_workers,
                                                    pin_memory=True)
 
-    # VC threshold validation
+    ###########################  VC threshold validation  ################################################
+
     if args.validate_multiple_thresholds:
         model_ = load_model(load_iters[-1]).model
         model_.fc = torch.nn.Linear(model_.fc.in_features, total_classes)
-        model_.cuda(0)
+        model_.cuda(device)
         t_accs, ft_acc = test_threshold_acc(args, test_all_loader, model_, args.feat_vis_layer_name[-1],
                                             train_loader=train_loader, ts=args.thresholds_to_validate)
         save = {str(t): acc for t, acc in zip(args.thresholds_to_validate, t_accs)}
@@ -408,8 +411,22 @@ def test_run(device):
         np.savez('%s-bin-acc.npz' % args.feat_vis_layer_name[-1],
                  **save)
 
-        if args.validate_final_only:
-            sys.exit(0)
+    ###########################  Feature Ablation Analysis  ##############################################
+
+    if args.feature_ablation:
+        model_ = load_model(load_iters[-1]).model
+        f = np.load('%s-coverage.npz' % args.save_all_dir)
+        sort_fc(model_, f['classes_seen'], f['model_classes_seen'])
+        model_.cuda(device)
+        ablation_scores = test_features(test_all_loader, model_, args.feat_vis_layer_name[-1], device=device)
+        np.save('feat-ablation-scores/%s-feat-ablation.npy' % args.save_all_dir.split('/')[-1], ablation_scores)
+
+    ###########################  EARLY EXIT  ############################################################
+
+    if args.eval_final_only:
+        sys.exit(0)
+
+    ######################################################################################################
 
     # Initialize VC Dataset
     # TODO should we use transform?

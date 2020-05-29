@@ -15,6 +15,27 @@ import pickle
 
 import pdb
 
+def sort_fc(model, classes_seen, model_classes_seen):
+    fc = model.fc
+    out_dim = fc.out_features
+
+    classes_map = get_classes_map(out_dim, classes_seen, model_classes_seen)
+    w = fc.weight.data
+    fc.weight.data = w[classes_map]
+
+
+def get_classes_map(total_classes, classes_seen, model_classes_seen):
+    classes = set()
+    classes_map = np.zeros(total_classes)
+    for c, mc in zip(classes_seen.flatten(), model_classes_seen.flatten()):
+        if c in classes:
+            continue
+        classes = classes.union({c})
+        classes_map[c] = mc
+
+    return classes_map
+
+
 class IncrNet(nn.Module):
     def __init__(self, args, device, cifar=False):
         self.debug = args.debug
