@@ -208,6 +208,8 @@ parser.add_argument('--save_activations', action='store_true', help='Store activ
 parser.add_argument('--lr_threshold', type=float, default=0.04, help='Learning rate for threshold learning')
 
 
+parser.add_argument('--resume_iter', type=int, default=None, help='Specify iteration to start testing from')
+
 # System options
 parser.add_argument("--test_freq", default=1, type=int,
                     help="Number of iterations of training after"
@@ -250,7 +252,9 @@ torch.manual_seed(args.seed)
 
 num_iters = args.num_iters
 test_freq = args.test_freq
-load_iters = list(range(0, num_iters, test_freq))
+start_iter = args.resume_iter if args.resume_iter else 0
+assert start_iter % test_freq == 0, 'Specified --resume_iter should be a multiple of --test_freq'
+load_iters = list(range(start_iter, num_iters, test_freq))
 
 test_model = IncrNet(args, device=0, cifar=True)
 
