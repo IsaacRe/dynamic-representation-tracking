@@ -825,20 +825,8 @@ def test_run(device):
                   ' learning exposures : ' %
                   (s + args.test_freq), test_acc)
 
-
-                print("[Test Process] Saving model and other data")
-                test_model.cpu()
-                test_model.num_iters_done = s + args.test_freq
-                if not args.save_all:
-                    torch.save(test_model, "%s-model.pth.tar" %
-                               os.path.splitext(args.outfile)[0])
-                else:
-                    torch.save(test_model, "%s/model_iter_%d.pth.tar"
-                                            % (args.save_all_dir, s))
-
                 # add nodes for unseen classes to output layer
-                test_model.increment_classes([c for c in all_classes if c not in test_model.classes_map])
-                test_model.cuda(device=device)
+                #test_model.increment_classes([c for c in all_classes if c not in test_model.classes_map])
 
             else:
                 writer.write(Test_accuracy=np.nan, Test_time=np.nan)
@@ -942,6 +930,18 @@ def test_run(device):
                      acc_matr=acc_matr,
                      model_hyper_params=model.fetch_hyper_params(),
                      args=args, num_iters_done=s)
+
+            ###############################  Save Model  ######################################################
+
+            print("[Test Process] Saving model and other data")
+            test_model.cpu()
+            test_model.num_iters_done = s + args.test_freq
+            if not args.save_all:
+                torch.save(test_model, "%s-model.pth.tar" %
+                           os.path.splitext(args.outfile)[0])
+            else:
+                torch.save(test_model, "%s/model_iter_%d.pth.tar"
+                           % (args.save_all_dir, s))
 
             # loop var increment
             s += args.test_freq
