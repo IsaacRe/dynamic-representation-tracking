@@ -109,7 +109,7 @@ class Pruner(ActivationTracker):
     def test_features(self, loader, layer_name, device=0):
         n_features = 512
         n_tests = n_features + 1
-        f_ablation_scores = np.zeros(n_features)
+        f_ablation_scores = np.zeros(n_tests)
 
         # iteratively test model accuracy for pruning of each feature node individually
         pbar = tqdm(total=n_tests * len(loader))
