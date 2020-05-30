@@ -26,7 +26,7 @@ from csv_writer import CSVWriter
 from feature_matching import match, between_net_correlation
 from feature_vis_2 import PatchTracker
 from feature_generalizability import ANOVATracker
-from vc_utils.vc_dataset import set_base_dataset, get_vc_dataset, test_vc_accuracy
+from vc_utils.vc_dataset import set_base_dataset, get_vc_dataset, test_vc_accuracy_v2
 from vc_utils.activation_tracker import ActivationTracker
 set_base_dataset('CIFAR')
 

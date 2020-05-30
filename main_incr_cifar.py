@@ -23,7 +23,7 @@ from csv_writer import CSVWriter
 from feature_matching import match, between_net_correlation
 from feature_vis_2 import PatchTracker
 from feature_generalizability import ANOVATracker
-from vc_utils.vc_dataset import set_base_dataset, get_vc_dataset, test_vc_accuracy
+from vc_utils.vc_dataset import set_base_dataset, get_vc_dataset, test_vc_accuracy_v1
 from vc_utils.activation_tracker import ActivationTracker
 from prune_mask import store_prune_mask_model
 set_base_dataset('CIFAR')
@@ -847,7 +847,7 @@ def test_run(device):
 
             if args.track_vc:
                 print('[Test Process] Testing accuracy over visual concepts...')
-                vc_acc_, vc_weight = test_vc_accuracy(args, test_model.model, vc_module_name, vc_dataset, device=device)
+                vc_acc_, vc_weight = test_vc_accuracy_v1(args, test_model.model, vc_module_name, vc_dataset, device=device)
                 vc_acc = {str(idx): acc for idx, acc in zip(vc_dataset.kept_idxs, vc_acc_)}
                 vc_writer.write(Iteration=s, **vc_acc)
                 vc_weights += [vc_weight]
