@@ -496,8 +496,14 @@ if not args.mix_class:
 
 print("perm_id:", perm_id)
 
-
-perm_id = expand_perm(perm_id, args.num_iters, num_classes, total_classes)
+if args.num_iters == total_classes // args.num_classes:
+    num_iters_ = args.num_iters * 2
+    args.fix_exposure = True
+    perm_id = np.concatenate([perm_id, perm_id])
+    perm_id = expand_perm(perm_id, num_iters_, num_classes, total_classes)
+    perm_id = perm_id[:args.num_iters]
+else:
+    perm_id = expand_perm(perm_id, args.num_iters, num_classes, total_classes)
 
 
 train_set, test_set, train_fc_set, test_all_set = get_datasets(args, num_classes, all_classes)
@@ -519,8 +525,8 @@ print(num_classes)
 acc_matr = np.zeros((total_classes, num_iters))
 if args.ft_fc:
     acc_matr_fc = np.zeros_like(acc_matr)
-coverage = np.zeros((total_classes, num_iters))
-n_known = np.zeros(num_iters, dtype=np.int32)
+coverage = np.zeros((total_classes, num_iters + 1))
+n_known = np.zeros(num_iters + 1, dtype=np.int32)
 
 classes_seen = []
 model_classes_seen = []  # Class index numbers stored by model
@@ -549,6 +555,9 @@ if args.feat_corr:
     save_data += ['Feat_match_correlation', 'Correlation_time']
 writer = CSVWriter(args.outfile, *save_data)
 
+# add null index to beginning of perm_id
+perm_id.insert(0, None)
+
 def train_run(device):
     global train_set
     model.cuda(device=device)
@@ -559,6 +568,9 @@ def train_run(device):
     print("Args: ", args)
     train_wait_time = 0
 
+    # Fix for extra test run at init
+    args.num_iters += 1
+
     running_activations = {}
 
     while s < args.num_iters:
@@ -566,6 +578,7 @@ def train_run(device):
             cond_var.acquire()
             train_counter.value += 1
             expanded_classes[s % args.test_freq] = None
+            classes_seen.append(None)
 
             if args.should_prune:
                 store_prune_mask_model(model, 80, args.save_all_dir)
