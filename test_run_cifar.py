@@ -419,7 +419,7 @@ def test_run(device):
         sort_fc(model_, f['classes_seen'], f['model_classes_seen'])
         model_.cuda(device)
         baseline, ablation_scores = test_features(test_all_loader, model_, args.feat_vis_layer_name[-1], device=device)
-        np.savez('feat-ablation-scores/%s-feat-ablation.npz' % args.save_all_dir.split('/')[-1],
+        np.savez('feature-ablation-scores/%s-feat-ablation.npz' % args.save_all_dir.split('/')[-1],
                  baseline=baseline,
                  class_acc=ablation_scores,
                  fc_weight=model_._modules['fc'].weight.data.transpose(1, 0).cpu().numpy())
