@@ -108,13 +108,19 @@ class Pruner(ActivationTracker):
 
     def test_features(self, loader, layer_name, device=0):
         n_features = 512
+        n_classes = self.network._modules['fc'].out_features
         n_tests = n_features + 1
-        f_ablation_scores = np.zeros(n_tests)
+        f_ablation_class_scores = np.zeros((n_features, n_classes))
+        batch_size = loader.batch_size
+        labels = torch.zeros(n_classes, batch_size).cuda(device)
+        pred = torch.zeros(n_classes, batch_size).cuda(device)
+        arange = torch.arange(batch_size).cuda(device)
 
         # iteratively test model accuracy for pruning of each feature node individually
         pbar = tqdm(total=n_tests * len(loader))
         for f in range(-1, n_features):
-            total = correct = 0
+            total = np.zeros(n_classes)
+            correct = np.zeros(n_classes)
 
             # set up pruning for current feature output
             prune_mask = np.zeros(512).astype(np.bool_)
@@ -126,11 +132,20 @@ class Pruner(ActivationTracker):
                     for i, x, y in loader:
                         x, y = x.to(device), y.to(device)
                         out = self.network(x)
-                        correct += (out.argmax(dim=1) == y).sum().cpu().numpy()
-                        total += len(y)
+
+                        labels[:] = 0.0
+                        pred[:] = 0.0
+                        labels[(y, arange)] = 1.0
+                        pred[(out.argmax(dim=1), arange)] = 1.0
+
+                        correct += (pred * labels).sum(dim=1).cpu().numpy().astype(np.uint32)
+                        total += labels.sum(dim=1).cpu().numpy().astype(np.uint32)
 
                         pbar.update(1)
 
-                f_ablation_scores[f] = correct / total
+                if f < 0:
+                    baseline_score = correct / total
+                else:
+                    f_ablation_class_scores[f] = correct / total
 
-        return f_ablation_scores
+        return baseline_score, f_ablation_class_scores

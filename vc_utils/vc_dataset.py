@@ -33,8 +33,8 @@ def get_vc_dataset(args, model, layer_name, *dset_args, device=0, balance=False,
 
 def test_features(test_loader, model, layer_name, device=0):
     pruner = Pruner(model, layer_name)
-    feature_ablation_scores = pruner.test_features(test_loader, layer_name, device=device)
-    return feature_ablation_scores
+    results = pruner.test_features(test_loader, layer_name, device=device)
+    return results
 
 
 def test_threshold_acc(args, test_loader, model, layer_name, train_loader=None, ts=None, device=0):
