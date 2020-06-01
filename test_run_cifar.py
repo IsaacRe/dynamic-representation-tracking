@@ -225,6 +225,10 @@ parser.add_argument("--one_gpu", dest="one_gpu", action="store_true",
 parser.add_argument("--debug", action='store_true',
                     help="Set DataLoaders to num_workers=0 for debugging in data iteration loop")
 
+# Batch settings
+parser.add_argument('--batch', action='store_true', help='Model files are from batch run')
+parser.add_argument('--batches_per_epoch', type=int, help='Specify the # batches per epoch')
+
 parser.add_argument('--diff_perm', action='store_true')
 parser.add_argument('--seed', type=int, default=1, help='Set torch and numpy seed')
 
@@ -266,6 +270,17 @@ def load_model(i, device=0):
     model.from_resnet(args.save_all_dir + '/model_iter_%d.pth.tar' % i, load_fc=True)
     return model
 
+def load_model_batch(i, device=0):
+    itr = i % args.batches_per_epoch
+    epoch = i // args.batches_per_epoch
+    model = IncrNet(args, device=device, cifar=True)
+    model.from_resnet(args.save_all_dir + '/model_epoch_%d_iter_%d.pth.tar' % (epoch, itr),
+                      load_fc=True)
+    return model
+
+if args.batch:
+    load_model = load_model_batch
+
 def reorder_fc(model):
     w = model.fc.weight.data
     w_copy = w.clone()
@@ -282,7 +297,8 @@ def reorder_fc(model):
 
 corr_model = load_model(load_iters[-1])
 corr_model = corr_model.model
-reorder_fc(corr_model)
+if not args.batch:
+    reorder_fc(corr_model)
 corr_model.eval()
 
 # ensure samples is a multiple of num_classes
