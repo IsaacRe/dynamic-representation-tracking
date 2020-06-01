@@ -211,6 +211,7 @@ parser.add_argument('--lr_threshold', type=float, default=0.04, help='Learning r
 parser.add_argument('--feature_ablation', action='store_true', help='Perform feature ablation analysis')
 
 parser.add_argument('--resume_iter', type=int, default=None, help='Specify iteration to start testing from')
+parser.add_argument('--id', type=str, default='', help='Validation files (specify for multiple runs)')
 
 # System options
 parser.add_argument("--test_freq", default=1, type=int,
@@ -408,7 +409,7 @@ def test_run(device):
                                             train_loader=train_loader, ts=args.thresholds_to_validate)
         save = {str(t): acc for t, acc in zip(args.thresholds_to_validate, t_accs)}
         save['baseline'] = ft_acc
-        np.savez('%s-bin-acc.npz' % args.feat_vis_layer_name[-1],
+        np.savez('vc-results/threshold-validation/%s-bin-acc%s.npz' % (args.feat_vis_layer_name[-1], args.id),
                  **save)
 
     ###########################  Feature Ablation Analysis  ##############################################
