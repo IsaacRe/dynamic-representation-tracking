@@ -276,8 +276,8 @@ if args.feat_corr:
                                                      num_workers=0 if args.debug else args.num_workers,
                                                      batch_size=args.batch_size_corr)
 
-acc_matr = np.zeros((int(total_classes), num_epoch))
-coverage = np.zeros((int(total_classes), num_epoch))
+acc_matr = np.zeros((int(total_classes), len(train_dl) * num_epoch))
+coverage = np.zeros((int(total_classes), len(train_dl) * num_epoch))
 
 # Conditional variable, shared memory for synchronization
 cond_var = mp.Condition()
@@ -455,7 +455,7 @@ def test_run(device):
                     class_preds = all_preds[all_labels == i]
                     correct = np.sum(class_preds == i)
                     total = len(class_preds)
-                    acc_matr[i, epoch] = (100.0 * correct/total)
+                    acc_matr[i, itr] = (100.0 * correct/total)
 
                 test_acc = np.mean(acc_matr[:, epoch])
                 print("%.2f ," % test_acc, file=file)
