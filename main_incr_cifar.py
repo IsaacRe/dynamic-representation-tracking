@@ -562,7 +562,6 @@ perm_id.insert(0, None)
 # Fix for extra test run at init
 args.num_iters += 1
 
-
 def train_run(device):
     global train_set
     model.cuda(device=device)
@@ -572,6 +571,9 @@ def train_run(device):
     print("####### Train Process Running ########")
     print("Args: ", args)
     train_wait_time = 0
+
+    # Fix for extra test run at init
+    args.num_iters += 1
 
     running_activations = {}
 
