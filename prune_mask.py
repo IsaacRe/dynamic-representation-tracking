@@ -40,6 +40,7 @@ parser.add_argument("--save_all", dest="save_all", action="store_true",
                          "test_freq number of learning exposures")
 parser.add_argument("--save_all_dir", dest="save_all_dir", type=str,
                     default=None, help="Directory to store all models in")
+parser.add_argument("--save_all_dir2", dest="save_all_dir2", type=str, default=None)
 parser.add_argument("--resume", dest="resume", action="store_true",
                     help="Resume training from checkpoint at outfile")
 parser.add_argument("--resume_outfile", default=None, type=str,
@@ -239,9 +240,9 @@ num_iters = args.num_iters
 test_freq = args.test_freq
 load_iters = list(range(0, num_iters, test_freq))
 
-def load_model(i, device=0):
+def load_model(i, save_all_dir, device=0):
     model = IncrNet(args, device=device, cifar=True)
-    model.from_resnet(args.save_all_dir + '-saved_models/model_iter_%d.pth.tar' % i, load_fc=True)
+    model.from_resnet(save_all_dir + '-saved_models/model_iter_%d.pth.tar' % i, load_fc=True)
     return model
 
 def get_sad_acc(mask1, mask2, key):
@@ -290,10 +291,10 @@ def get_avg_recall(gt_md, md):
 
     return (sum_rec / num_params) * 100
 
-def prune_mask(i, percent, mod=None):
+def prune_mask(i, percent, save_all_dir, mod=None):
     mask_dicts = {}
     if mod is None:
-        model = load_model(i)
+        model = load_model(i, save_all_dir)
     else:
         model = mod
 
@@ -320,13 +321,13 @@ def store_prune_mask(i, percent, save_all_dir):
     # with open("%s/model_iter_%d.pkl" % (save_all_dir, i), "wb") as f:
         # pickle.dump(mask_dicts, f, pickle.HIGHEST_PROTOCOL)
 
-def total_data(percent, total=5000, freq=10):
-    final_md = prune_mask(total-freq, percent)
+def total_data(percent, save_all_dir, total=5000, freq=10):
+    final_md = prune_mask(total-freq, percent, save_all_dir)
     accs = []
     recs = []
 
     for i in range(0, total, freq):
-        md = prune_mask(i, percent)
+        md = prune_mask(i, percent, save_all_dir)
         acc = get_avg_acc(final_md, md)
         rec = get_avg_recall(final_md, md)
         accs.append(acc)
@@ -372,13 +373,17 @@ def main():
     percent = 80
     total_iter = 5000
     test_freq = 10
-    # accs, recs = total_data(percent)
-    m1s, m2s = get_metrics_total(percent)
+    accs1, recs1 = total_data(percent, args.save_all_dir)
+    accs2, recs2 = total_data(percent, args.save_all_dir2)
+
+    accs_avg = (accs1 + accs2) / 2
+    recs_avg = (recs1 + recs2) / 2
+    # m1s, m2s = get_metrics_total(percent)
     xs = [i for i in range(0, total_iter, test_freq)]
     xticks = [i for i in range(0, total_iter, 500)]
 
     sns.set()
-    # sns.set_palette("deep")
+    sns.set_palette("deep")
     # plt.plot(xs, accs, label="accuracy")
     # plt.plot(xs, recs, label="recall")
     # plt.xlabel("Iterations")
@@ -387,9 +392,9 @@ def main():
     # plt.legend()
     # plt.savefig("prune.png")
     fig, (ax1, ax2) = plt.subplots(1, 2)
-    fig.suptitle("Prune Accuracy and Recall vs Iterations")
-    ax1.plot(xs, m1s, label="Metric 1")
-    ax2.plot(xs, m2s, label="Metric 2")
+    fig.suptitle("Pruning Accuracy vs Recall Average")
+    ax1.plot(xs, accs_avg, label="Accuracy")
+    ax2.plot(xs, recs_avg, label="Recall")
     ax2.set_xlabel("Iterations")
 
     ax2.set_xticks(xticks)
@@ -397,8 +402,8 @@ def main():
     ax1.set_xticks(xticks)
     ax1.set_xticklabels(xticks, rotation=50, ha="right")
 
-    ax1.set_ylabel("Metric 1")
-    ax2.set_ylabel("Metric 2")
+    ax1.set_ylabel("Accuracy")
+    ax2.set_ylabel("Recall")
     # ax1.legend()
     # ax2.legend()
     # fig.show()
