@@ -370,17 +370,39 @@ def get_metrics_total(percent, total=5000, freq=10):
     return m1s, m2s
 
 def main():
-    percent = 80
-    total_iter = 5000
+    percent = 90
+    total_iter = 1000
     test_freq = 10
-    accs1, recs1 = total_data(percent, args.save_all_dir)
-    accs2, recs2 = total_data(percent, args.save_all_dir2)
+    save_all_dir1 = "/Scratchspace/irehg6/incr-runs/2class_1explr_500sample_1epoch_pt"
+    save_all_dir2 = "/Data/irehg6/incr-runs/2class_1explr_500sample_1epoch_pt"
 
-    accs_avg = (accs1 + accs2) / 2
-    recs_avg = (recs1 + recs2) / 2
+    save_all_dir3 = "/Scratchspace/irehg6/incr-runs/2class_0explr_500sample_1epoch_pt"
+    save_all_dir4 = "/Data/irehg6/incr-runs/2class_0explr_500sample_1epoch_pt"
+
+    save_all_dir5 = "/Scratchspace/irehg6/incr-runs/1class_1explr_500sample_1epoch_pt"
+    save_all_dir6 = "/Data/irehg6/incr-runs/1class_1explr_500sample_1epoch_pt"
+
+    accs1, recs1 = total_data(percent, save_all_dir1, total_iter, test_freq)
+    accs2, recs2 = total_data(percent, save_all_dir2, total_iter, test_freq)
+
+    accs3, recs3 = total_data(percent, save_all_dir3, total_iter, test_freq)
+    accs4, recs4 = total_data(percent, save_all_dir4, total_iter, test_freq)
+
+    accs5, recs5 = total_data(percent, save_all_dir5, total_iter, test_freq)
+    accs6, recs6 = total_data(percent, save_all_dir6, total_iter, test_freq)
+
+    accs_avg1 = (accs1 + accs2) / 2
+    recs_avg1 = (recs1 + recs2) / 2
+
+    accs_avg2 = (accs3 + accs4) / 2
+    recs_avg2 = (recs3 + recs4) / 2
+
+    accs_avg3 = (accs5 + accs6) / 2
+    recs_avg3 = (recs5 + recs6) / 2
     # m1s, m2s = get_metrics_total(percent)
+
     xs = [i for i in range(0, total_iter, test_freq)]
-    xticks = [i for i in range(0, total_iter, 500)]
+    xticks = [i for i in range(0, total_iter, 100)]
 
     sns.set()
     sns.set_palette("deep")
@@ -393,8 +415,12 @@ def main():
     # plt.savefig("prune.png")
     fig, (ax1, ax2) = plt.subplots(1, 2)
     fig.suptitle("Pruning Accuracy vs Recall Average")
-    ax1.plot(xs, accs_avg, label="Accuracy")
-    ax2.plot(xs, recs_avg, label="Recall")
+    ax1.plot(xs, accs_avg1, label="set 1")
+    ax1.plot(xs, accs_avg2, label="set 2")
+    ax1.plot(xs, accs_avg3, label="set 3")
+    ax2.plot(xs, recs_avg1, label="set 1")
+    ax2.plot(xs, recs_avg2, label="set 2")
+    ax2.plot(xs, recs_avg3, label="set 3")
     ax2.set_xlabel("Iterations")
 
     ax2.set_xticks(xticks)
