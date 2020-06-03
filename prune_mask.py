@@ -321,6 +321,17 @@ def store_prune_mask(i, percent, save_all_dir):
     # with open("%s/model_iter_%d.pkl" % (save_all_dir, i), "wb") as f:
         # pickle.dump(mask_dicts, f, pickle.HIGHEST_PROTOCOL)
 
+def total_accs(percent, save_all_dir, total=5000, freq=10):
+    final_md = prune_mask(total-freq, percent, save_all_dir)
+    accs = []
+
+    for i in range(0, total, freq):
+        md = prune_mask(i, percent, save_all_dir)
+        acc = get_avg_acc(final_md, md)
+        accs.append(acc)
+
+    return np.array(accs)
+
 def total_data(percent, save_all_dir, total=5000, freq=10):
     final_md = prune_mask(total-freq, percent, save_all_dir)
     accs = []
@@ -373,39 +384,53 @@ def main():
     percent = 90
     total_iter = 1000
     test_freq = 10
-    save_all_dir1 = "/Scratchspace/irehg6/incr-runs/2class_1explr_500sample_1epoch_pt"
-    save_all_dir2 = "/Data/irehg6/incr-runs/2class_1explr_500sample_1epoch_pt"
+    save_all_dir1 = "/Scratchspace/irehg6/incr-runs/2class_400explr_500sample_1epoch"
+    save_all_dir2 = "/Scratchspace/irehg6/incr-runs/2class_400explr_500sample_1epoch_pt"
+    # save_all_dir1 = "/Scratchspace/irehg6/incr-runs/2class_1explr_500sample_1epoch_pt"
+    # save_all_dir2 = "/Data/irehg6/incr-runs/2class_1explr_500sample_1epoch_pt"
 
-    save_all_dir3 = "/Scratchspace/irehg6/incr-runs/2class_0explr_500sample_1epoch_pt"
-    save_all_dir4 = "/Data/irehg6/incr-runs/2class_0explr_500sample_1epoch_pt"
+    # save_all_dir3 = "/Scratchspace/irehg6/incr-runs/2class_0explr_500sample_1epoch_pt"
+    # save_all_dir4 = "/Data/irehg6/incr-runs/2class_0explr_500sample_1epoch_pt"
 
-    save_all_dir5 = "/Scratchspace/irehg6/incr-runs/1class_1explr_500sample_1epoch_pt"
-    save_all_dir6 = "/Data/irehg6/incr-runs/1class_1explr_500sample_1epoch_pt"
+    # save_all_dir5 = "/Scratchspace/irehg6/incr-runs/1class_1explr_500sample_1epoch_pt"
+    # save_all_dir6 = "/Data/irehg6/incr-runs/1class_1explr_500sample_1epoch_pt"
 
-    accs1, recs1 = total_data(percent, save_all_dir1, total_iter, test_freq)
-    accs2, recs2 = total_data(percent, save_all_dir2, total_iter, test_freq)
+    # accs1, recs1 = total_data(percent, save_all_dir1, total_iter, test_freq)
+    # accs2, recs2 = total_data(percent, save_all_dir2, total_iter, test_freq)
 
-    accs3, recs3 = total_data(percent, save_all_dir3, total_iter, test_freq)
-    accs4, recs4 = total_data(percent, save_all_dir4, total_iter, test_freq)
+    # accs3, recs3 = total_data(percent, save_all_dir3, total_iter, test_freq)
+    # accs4, recs4 = total_data(percent, save_all_dir4, total_iter, test_freq)
 
-    accs5, recs5 = total_data(percent, save_all_dir5, total_iter, test_freq)
-    accs6, recs6 = total_data(percent, save_all_dir6, total_iter, test_freq)
+    # accs5, recs5 = total_data(percent, save_all_dir5, total_iter, test_freq)
+    # accs6, recs6 = total_data(percent, save_all_dir6, total_iter, test_freq)
 
-    accs_avg1 = (accs1 + accs2) / 2
-    recs_avg1 = (recs1 + recs2) / 2
+    # accs1 = total_accs(percent, save_all_dir1, total_iter, test_freq)
+    # accs2 = total_accs(percent, save_all_dir2, total_iter, test_freq)
+    # accs3 = total_accs(percent, save_all_dir3, total_iter, test_freq)
+    # accs4 = total_accs(percent, save_all_dir4, total_iter, test_freq)
+    # accs5 = total_accs(percent, save_all_dir5, total_iter, test_freq)
+    # accs6 = total_accs(percent, save_all_dir6, total_iter, test_freq)
 
-    accs_avg2 = (accs3 + accs4) / 2
-    recs_avg2 = (recs3 + recs4) / 2
-
-    accs_avg3 = (accs5 + accs6) / 2
-    recs_avg3 = (recs5 + recs6) / 2
-    # m1s, m2s = get_metrics_total(percent)
+    # accs_avg1 = (accs1 + accs2) / 2
+    # accs_avg2 = (accs3 + accs4) / 2
+    # accs_avg3 = (accs5 + accs6) / 2
+    accs1 = total_accs(percent, save_all_dir1, total_iter, test_freq)
+    accs2 = total_accs(percent, save_all_dir2, total_iter, test_freq)
 
     xs = [i for i in range(0, total_iter, test_freq)]
-    xticks = [i for i in range(0, total_iter, 100)]
+    xticks = [i for i in range(0, total_iter, 200)]
 
     sns.set()
     sns.set_palette("deep")
+    # plt.plot(xs, accs_avg1, label="set 1")
+    # plt.plot(xs, accs_avg2, label="set 2")
+    # plt.plot(xs, accs_avg3, label="set 3")
+    plt.plot(xs, accs1, label="Random Init")
+    plt.plot(xs, accs2, label="Pretrained")
+    plt.xlabel("Iterations")
+    plt.ylabel("Accuracy")
+    plt.xticks(xticks)
+    plt.legend()
     # plt.plot(xs, accs, label="accuracy")
     # plt.plot(xs, recs, label="recall")
     # plt.xlabel("Iterations")
@@ -413,27 +438,28 @@ def main():
     # plt.xticks(xticks)
     # plt.legend()
     # plt.savefig("prune.png")
-    fig, (ax1, ax2) = plt.subplots(1, 2)
-    fig.suptitle("Pruning Accuracy vs Recall Average")
-    ax1.plot(xs, accs_avg1, label="set 1")
-    ax1.plot(xs, accs_avg2, label="set 2")
-    ax1.plot(xs, accs_avg3, label="set 3")
-    ax2.plot(xs, recs_avg1, label="set 1")
-    ax2.plot(xs, recs_avg2, label="set 2")
-    ax2.plot(xs, recs_avg3, label="set 3")
-    ax2.set_xlabel("Iterations")
+    # fig, (ax1, ax2) = plt.subplots(1, 2)
+    # fig.suptitle("Pruning Accuracy vs Recall Average")
+    # ax1.plot(xs, accs_avg1, label="set 1")
+    # ax1.plot(xs, accs_avg2, label="set 2")
+    # ax1.plot(xs, accs_avg3, label="set 3")
+    # ax2.plot(xs, recs_avg1, label="set 1")
+    # ax2.plot(xs, recs_avg2, label="set 2")
+    # ax2.plot(xs, recs_avg3, label="set 3")
+    # ax2.set_xlabel("Iterations")
 
-    ax2.set_xticks(xticks)
-    ax2.set_xticklabels(xticks, rotation=50, ha="right")
-    ax1.set_xticks(xticks)
-    ax1.set_xticklabels(xticks, rotation=50, ha="right")
+    # ax2.set_xticks(xticks)
+    # ax2.set_xticklabels(xticks, rotation=50, ha="right")
+    # ax1.set_xticks(xticks)
+    # ax1.set_xticklabels(xticks, rotation=50, ha="right")
 
-    ax1.set_ylabel("Accuracy")
-    ax2.set_ylabel("Recall")
+    # ax1.set_ylabel("Accuracy")
+    # ax2.set_ylabel("Recall")
     # ax1.legend()
     # ax2.legend()
     # fig.show()
-    fig.savefig("prune.png")
+    # fig.savefig("prune.png")
+    plt.savefig("prune.png")
 
 if __name__ == "__main__":
     main()
