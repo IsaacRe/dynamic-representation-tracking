@@ -384,16 +384,16 @@ def main():
     percent = 90
     total_iter = 1000
     test_freq = 10
-    save_all_dir1 = "/Scratchspace/irehg6/incr-runs/2class_400explr_500sample_1epoch"
-    save_all_dir2 = "/Scratchspace/irehg6/incr-runs/2class_400explr_500sample_1epoch_pt"
-    # save_all_dir1 = "/Scratchspace/irehg6/incr-runs/2class_1explr_500sample_1epoch_pt"
-    # save_all_dir2 = "/Data/irehg6/incr-runs/2class_1explr_500sample_1epoch_pt"
+    # save_all_dir1 = "/Scratchspace/irehg6/incr-runs/2class_400explr_500sample_1epoch"
+    # save_all_dir2 = "/Scratchspace/irehg6/incr-runs/2class_400explr_500sample_1epoch_pt"
+    save_all_dir1 = "/Scratchspace/irehg6/incr-runs/2class_1explr_500sample_1epoch_pt"
+    save_all_dir2 = "/Data/irehg6/incr-runs/2class_1explr_500sample_1epoch_pt"
 
-    # save_all_dir3 = "/Scratchspace/irehg6/incr-runs/2class_0explr_500sample_1epoch_pt"
-    # save_all_dir4 = "/Data/irehg6/incr-runs/2class_0explr_500sample_1epoch_pt"
+    save_all_dir3 = "/Scratchspace/irehg6/incr-runs/2class_0explr_500sample_1epoch_pt"
+    save_all_dir4 = "/Data/irehg6/incr-runs/2class_0explr_500sample_1epoch_pt"
 
-    # save_all_dir5 = "/Scratchspace/irehg6/incr-runs/1class_1explr_500sample_1epoch_pt"
-    # save_all_dir6 = "/Data/irehg6/incr-runs/1class_1explr_500sample_1epoch_pt"
+    save_all_dir5 = "/Scratchspace/irehg6/incr-runs/1class_1explr_500sample_1epoch_pt"
+    save_all_dir6 = "/Data/irehg6/incr-runs/1class_1explr_500sample_1epoch_pt"
 
     # accs1, recs1 = total_data(percent, save_all_dir1, total_iter, test_freq)
     # accs2, recs2 = total_data(percent, save_all_dir2, total_iter, test_freq)
@@ -404,29 +404,29 @@ def main():
     # accs5, recs5 = total_data(percent, save_all_dir5, total_iter, test_freq)
     # accs6, recs6 = total_data(percent, save_all_dir6, total_iter, test_freq)
 
-    # accs1 = total_accs(percent, save_all_dir1, total_iter, test_freq)
-    # accs2 = total_accs(percent, save_all_dir2, total_iter, test_freq)
-    # accs3 = total_accs(percent, save_all_dir3, total_iter, test_freq)
-    # accs4 = total_accs(percent, save_all_dir4, total_iter, test_freq)
-    # accs5 = total_accs(percent, save_all_dir5, total_iter, test_freq)
-    # accs6 = total_accs(percent, save_all_dir6, total_iter, test_freq)
-
-    # accs_avg1 = (accs1 + accs2) / 2
-    # accs_avg2 = (accs3 + accs4) / 2
-    # accs_avg3 = (accs5 + accs6) / 2
     accs1 = total_accs(percent, save_all_dir1, total_iter, test_freq)
     accs2 = total_accs(percent, save_all_dir2, total_iter, test_freq)
+    accs3 = total_accs(percent, save_all_dir3, total_iter, test_freq)
+    accs4 = total_accs(percent, save_all_dir4, total_iter, test_freq)
+    accs5 = total_accs(percent, save_all_dir5, total_iter, test_freq)
+    accs6 = total_accs(percent, save_all_dir6, total_iter, test_freq)
+
+    accs_avg1 = (accs1 + accs2) / 2
+    accs_avg2 = (accs3 + accs4) / 2
+    accs_avg3 = (accs5 + accs6) / 2
+    # accs1 = total_accs(percent, save_all_dir1, total_iter, test_freq)
+    # accs2 = total_accs(percent, save_all_dir2, total_iter, test_freq)
 
     xs = [i for i in range(0, total_iter, test_freq)]
     xticks = [i for i in range(0, total_iter, 200)]
 
     sns.set()
     sns.set_palette("deep")
-    # plt.plot(xs, accs_avg1, label="set 1")
-    # plt.plot(xs, accs_avg2, label="set 2")
-    # plt.plot(xs, accs_avg3, label="set 3")
-    plt.plot(xs, accs1, label="Random Init")
-    plt.plot(xs, accs2, label="Pretrained")
+    plt.plot(xs, accs_avg1, label="2 classes, 1 exemplar")
+    plt.plot(xs, accs_avg2, label="2 classes, 0 exemplar")
+    plt.plot(xs, accs_avg3, label="1 class, 1 exemplar")
+    # plt.plot(xs, accs1, label="Random Init")
+    # plt.plot(xs, accs2, label="Pretrained")
     plt.xlabel("Iterations")
     plt.ylabel("Accuracy")
     plt.xticks(xticks)
