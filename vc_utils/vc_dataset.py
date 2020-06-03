@@ -252,7 +252,7 @@ def _define_VisualConceptDataset(base_dataset):
     class VisualConceptDataset(base_dataset):
 
         def __init__(self, args, network, module_name, *dset_args, train=True, batch_size=100, device=0,
-                     store_on_gpu=False, version='1', balance=False, cache=False, **dset_kwargs):
+                     store_on_gpu=False, version='1', balance=False, cache=True, **dset_kwargs):
             print('Getting VC %s dataset...' % ('train' if train else 'test'))
             super(VisualConceptDataset, self).__init__(*dset_args, train=train, **dset_kwargs, crop=False)
             self.is_train = train

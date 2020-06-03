@@ -206,6 +206,7 @@ parser.add_argument('--vc_recall', action='store_true', help='Compute recall for
 parser.add_argument('--save_activations', action='store_true', help='Store activations of the final model at the'
                                                                     ' feat_vis layer')
 parser.add_argument('--lr_threshold', type=float, default=0.04, help='Learning rate for threshold learning')
+parser.add_argument('--trainset_eval', action='store_true', help='evaluate on the training set')
 
 # feature ablation analysis
 parser.add_argument('--feature_ablation', action='store_true', help='Perform feature ablation analysis')
@@ -457,9 +458,12 @@ def test_run(device):
         vc_dataset_train = get_vc_dataset(args, corr_model, args.feat_vis_layer_name[-1], all_classes,
                                           balance=args.vc_data_balance,
                                           root='./data', train=True, transform=None, mean_image=mean_image)
-        vc_dataset_test = get_vc_dataset(args, corr_model, args.feat_vis_layer_name[-1], all_classes,
-                                         balance=args.vc_data_balance,
-                                         root='./data', train=False, transform=None, mean_image=mean_image)
+        if not args.trainset_eval:
+            vc_dataset_test = get_vc_dataset(args, corr_model, args.feat_vis_layer_name[-1], all_classes,
+                                             balance=args.vc_data_balance,
+                                             root='./data', train=False, transform=None, mean_image=mean_image)
+        else:
+            vc_dataset_test = vc_dataset_train
         #acc, w = test_vc_accuracy(args, corr_model, args.feat_vis_layer_name[-1], vc_dataset, vc_dataset_test, device=device,
         #                          uniform_init=True, epochs=10)
 
