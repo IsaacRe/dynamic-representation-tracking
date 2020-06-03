@@ -252,7 +252,7 @@ def _define_VisualConceptDataset(base_dataset):
     class VisualConceptDataset(base_dataset):
 
         def __init__(self, args, network, module_name, *dset_args, train=True, batch_size=100, device=0,
-                     store_on_gpu=False, version='1', balance=False, cache=True, **dset_kwargs):
+                     store_on_gpu=False, version='1', balance=False, cache=False, **dset_kwargs):
             print('Getting VC %s dataset...' % ('train' if train else 'test'))
             super(VisualConceptDataset, self).__init__(*dset_args, train=train, **dset_kwargs, crop=False)
             self.is_train = train
@@ -527,9 +527,11 @@ class VCLabeler:
 
         discard_filter_mask = None
         if balance:
-            labels, select, discard_filters, num_p = self.get_balanced_data_mask(labels, -(labels - 1), 1000)
+            labels, select, discard_filters, num_p = self.get_balanced_data_mask(labels, -(labels - 1),
+                                                                                 self.min_data_points)
         else:
-            labels, _, discard_filters, num_p = self.get_balanced_data_mask(labels, -(labels - 1), 1000)
+            labels, _, discard_filters, num_p = self.get_balanced_data_mask(labels, -(labels - 1),
+                                                                            self.min_data_points)
             select = torch.ones_like(labels).type(torch.bool)
         if len(discard_filters) > 0:
             discard_filter_mask = np.zeros(binary_activations.shape[1]).astype(np.bool_)
