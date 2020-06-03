@@ -33,8 +33,8 @@ def get_vc_dataset(args, model, layer_name, *dset_args, device=0, balance=False,
 
 def test_features(test_loader, model, layer_name, device=0):
     pruner = Pruner(model, layer_name)
-    feature_ablation_scores = pruner.test_features(test_loader, layer_name, device=device)
-    return feature_ablation_scores
+    results = pruner.test_features(test_loader, layer_name, device=device)
+    return results
 
 
 def test_threshold_acc(args, test_loader, model, layer_name, train_loader=None, ts=None, device=0):
@@ -527,9 +527,11 @@ class VCLabeler:
 
         discard_filter_mask = None
         if balance:
-            labels, select, discard_filters, num_p = self.get_balanced_data_mask(labels, -(labels - 1), 1000)
+            labels, select, discard_filters, num_p = self.get_balanced_data_mask(labels, -(labels - 1),
+                                                                                 self.min_data_points)
         else:
-            labels, _, discard_filters, num_p = self.get_balanced_data_mask(labels, -(labels - 1), 1000)
+            labels, _, discard_filters, num_p = self.get_balanced_data_mask(labels, -(labels - 1),
+                                                                            self.min_data_points)
             select = torch.ones_like(labels).type(torch.bool)
         if len(discard_filters) > 0:
             discard_filter_mask = np.zeros(binary_activations.shape[1]).astype(np.bool_)

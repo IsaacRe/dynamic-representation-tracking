@@ -23,7 +23,7 @@ from csv_writer import CSVWriter
 from feature_matching import match, between_net_correlation
 from feature_vis_2 import PatchTracker
 from feature_generalizability import ANOVATracker
-from vc_utils.vc_dataset import set_base_dataset, get_vc_dataset, test_vc_accuracy
+from vc_utils.vc_dataset import set_base_dataset, get_vc_dataset
 from vc_utils.activation_tracker import ActivationTracker
 from prune_mask import store_prune_mask_model
 
@@ -438,7 +438,7 @@ args.resume_outfile = temp
 
 model_classes_seen = list(
     info_coverage["model_classes_seen"][:num_iters_done])
-classes_seen = list(info_coverage["classes_seen"][:num_iters_done])
+classes_seen = list(info_coverage["classes_seen"][:num_iters_done])[1:]
 
 total_classes = args.total_classes
 num_classes = args.num_classes
@@ -471,9 +471,9 @@ coverage = np.zeros((total_classes, total_iters))
 n_known = np.zeros(total_iters, dtype=np.int32)
 
 train_set.all_train_coverage = info_coverage["train_coverage"]
-coverage[:, :num_iters_done] = info_coverage["coverage"]
+coverage[:, :num_iters_done] = info_coverage["coverage"][:, :num_iters_done]
 if info_matr is not None:
-    acc_matr[:, :num_iters_done] = info_matr['acc_matr']
+    acc_matr[:, :num_iters_done] = info_matr['acc_matr'][:, :num_iters_done]
 
 train_counter = mp.Value("i", num_iters_done)
 test_counter = mp.Value("i", num_iters_done)

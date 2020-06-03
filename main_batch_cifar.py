@@ -276,8 +276,8 @@ if args.feat_corr:
                                                      num_workers=0 if args.debug else args.num_workers,
                                                      batch_size=args.batch_size_corr)
 
-acc_matr = np.zeros((int(total_classes), num_epoch))
-coverage = np.zeros((int(total_classes), num_epoch))
+acc_matr = np.zeros((int(total_classes), len(train_dl) * num_epoch))
+coverage = np.zeros((int(total_classes), len(train_dl) * num_epoch))
 
 # Conditional variable, shared memory for synchronization
 cond_var = mp.Condition()
@@ -349,17 +349,7 @@ def train_run(device):
 
     with tqdm(total=num_batches_per_epoch*num_epoch) as pbar:
         for epoch in range(start_epoch, num_epoch):
-            time_ptr = time.time()
-            # Do not start training till test process catches up
-            cond_var.acquire()
-            # while loop to avoid spurious wakeups
-            while test_counter.value + args.test_freq <= train_counter.value:
-                print("[Train Process] Waiting on test process")
-                print("[Train Process] train_counter : ", train_counter.value)
-                print("[Train Process] test_counter : ", test_counter.value)
-                cond_var.wait()
-            cond_var.release()
-            train_wait_time += time.time() - time_ptr
+
             if (epoch+1) % args.llr_freq == 0:
                 tqdm.write('Lowering Learning rate at epoch %d' %
                            (epoch+1))
@@ -367,6 +357,20 @@ def train_run(device):
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = lr
             for i, (images, labels) in enumerate(train_dl):
+
+
+                time_ptr = time.time()
+                # Do not start training till test process catches up
+                cond_var.acquire()
+                # while loop to avoid spurious wakeups
+                while test_counter.value + args.test_freq <= train_counter.value:
+                    print("[Train Process] Waiting on test process")
+                    print("[Train Process] train_counter : ", train_counter.value)
+                    print("[Train Process] test_counter : ", test_counter.value)
+                    cond_var.wait()
+                cond_var.release()
+                train_wait_time += time.time() - time_ptr
+
 
                 images = Variable(images).cuda(device=device)
                 labels = Variable(labels).cuda(device=device)
@@ -383,15 +387,15 @@ def train_run(device):
 
                 pbar.update(1)
 
-            cond_var.acquire()
-            train_counter.value += 1
+                cond_var.acquire()
+                train_counter.value += 1
 
-            if train_counter.value == test_counter.value + args.test_freq:
-                temp_model = copy.deepcopy(model)
-                temp_model.cpu()
-                dataQueue.put(temp_model)
-            cond_var.notify_all()
-            cond_var.release()
+                if train_counter.value == test_counter.value + args.test_freq:
+                    temp_model = copy.deepcopy(model)
+                    temp_model.cpu()
+                    dataQueue.put(temp_model)
+                cond_var.notify_all()
+                cond_var.release()
 
     time_ptr = time.time()
     all_done.wait()
@@ -409,81 +413,82 @@ def test_run(device):
         print("Model classes, Test Accuracy", file=file)
         for epoch in range(start_epoch, num_epoch):
 
-            # Wait till training is done
-            time_ptr = time.time()
-            cond_var.acquire()
-            while train_counter.value < test_counter.value + args.test_freq:
-                print("[Test Process] Waiting on train process")
-                print("[Test Process] train_counter : ", train_counter.value)
-                print("[Test Process] test_counter : ", test_counter.value)
-                cond_var.wait()
-            cond_var.release()
-            test_wait_time += time.time() - time_ptr
+            for itr in range(0, len(train_dl), args.test_freq):
 
-            cond_var.acquire()
-            test_model = dataQueue.get()
-            expanded_classes_copy = copy.deepcopy(expanded_classes)
-            test_counter.value += args.test_freq
-            cond_var.notify_all()
-            cond_var.release()
+                # Wait till training is done
+                time_ptr = time.time()
+                cond_var.acquire()
+                while train_counter.value < test_counter.value + args.test_freq:
+                    print("[Test Process] Waiting on train process")
+                    print("[Test Process] train_counter : ", train_counter.value)
+                    print("[Test Process] test_counter : ", test_counter.value)
+                    cond_var.wait()
+                cond_var.release()
+                test_wait_time += time.time() - time_ptr
 
-            print("[Test Process] Test Set Length:", len(test_dl.dataset.indices))
+                cond_var.acquire()
+                test_model = dataQueue.get()
+                expanded_classes_copy = copy.deepcopy(expanded_classes)
+                test_counter.value += args.test_freq
+                cond_var.notify_all()
+                cond_var.release()
 
-            test_model.cuda(device=device)
-            test_model.eval()
+                print("[Test Process] Test Set Length:", len(test_dl.dataset.indices))
 
-            print("[Test Process] Computing Accuracy matrix...")
-            all_labels = []
-            all_preds = []
-            with torch.no_grad():
-                for images, labels in test_dl:
-                    images = Variable(images).cuda(device=device)
-                    logits = test_model.forward(images)
-                    _, preds = logits.max(dim=1)
-                    all_preds.append(preds.data.cpu().numpy())
-                    all_labels.append(labels.numpy())
-            all_preds = np.concatenate(all_preds, axis=0)
-            all_labels = np.concatenate(all_labels, axis=0)
+                test_model.cuda(device=device)
+                test_model.eval()
 
-            for i in range(total_classes):
-                class_preds = all_preds[all_labels == i]
-                correct = np.sum(class_preds == i)
-                total = len(class_preds)
-                acc_matr[i, epoch] = (100.0 * correct/total)
+                print("[Test Process] Computing Accuracy matrix...")
+                all_labels = []
+                all_preds = []
+                with torch.no_grad():
+                    for images, labels in test_dl:
+                        images = Variable(images).cuda(device=device)
+                        logits = test_model.forward(images)
+                        _, preds = logits.max(dim=1)
+                        all_preds.append(preds.data.cpu().numpy())
+                        all_labels.append(labels.numpy())
+                all_preds = np.concatenate(all_preds, axis=0)
+                all_labels = np.concatenate(all_labels, axis=0)
 
-            test_acc = np.mean(acc_matr[:, epoch])
-            print("%.2f ," % test_acc, file=file)
-            print("[Test Process] =======> Test Accuracy after %d"
-                  " learning exposures : " %
-                  (epoch + args.test_freq), test_acc)
+                for i in range(total_classes):
+                    class_preds = all_preds[all_labels == i]
+                    correct = np.sum(class_preds == i)
+                    total = len(class_preds)
+                    acc_matr[i, itr] = (100.0 * correct/total)
 
-            if args.feat_corr:
-                print("[Test Process] Computing Correlation Matrix...")
-                corr_model.cuda(device)
-                matches, corr, matrix = match(device, correlation_loader, test_model, corr_model,
-                                              args.feat_vis_layer_name[0], replace=False)
+                test_acc = np.mean(acc_matr[:, epoch])
+                print("%.2f ," % test_acc, file=file)
+                print("[Test Process] =======> Test Accuracy after %d"
+                      " learning exposures : " %
+                      (epoch + args.test_freq), test_acc)
 
-                if args.save_matr:
-                    matrix_dir = args.outfile.split('.')[0] + '-corr_matrix/'
-                    try:
-                        os.mkdir(matrix_dir)
-                    except FileExistsError:
-                        pass
-                    np.save(matrix_dir + '%s-matr-%d.npy' % (args.outfile.split('/')[-1].split('.')[0], epoch), matrix)
+                if args.feat_corr:
+                    print("[Test Process] Computing Correlation Matrix...")
+                    corr_model.cuda(device)
+                    matches, corr, matrix = match(device, correlation_loader, test_model, corr_model,
+                                                  args.feat_vis_layer_name[0], replace=False)
 
-            print("[Test Process] Saving model and other data")
-            test_model.cpu()
-            test_model.num_iters_done = epoch
-            if not args.save_all:
-                torch.save(test_model, "%s-model.pth.tar" %
-                           os.path.splitext(args.outfile)[0])
-            else:
-                torch.save(test_model, "%s-saved_models/model_iter_%d.pth.tar"
-                                        %(os.path.join(args.save_all_dir,
-                                        os.path.splitext(args.outfile)[0]), epoch))
+                    if args.save_matr:
+                        matrix_dir = args.outfile.split('.')[0] + '-corr_matrix/'
+                        try:
+                            os.mkdir(matrix_dir)
+                        except FileExistsError:
+                            pass
+                        np.save(matrix_dir + '%s-matr-%d.npy' % (args.outfile.split('/')[-1].split('.')[0], epoch), matrix)
 
-            np.savez(args.outfile[:-4] + "-matr.npz", acc_matr=acc_matr,
-                     githash=expt_githash, args=args, num_iter_done=epoch)
+                print("[Test Process] Saving model and other data")
+                test_model.cpu()
+                test_model.num_iters_done = epoch
+                if not args.save_all:
+                    torch.save(test_model, "%s-model.pth.tar" %
+                               os.path.splitext(args.outfile)[0])
+                else:
+                    torch.save(test_model, "%s/model_epoch_%d_iter_%d.pth.tar"
+                                            %(args.save_all_dir, epoch, itr))
+
+                np.savez(args.outfile[:-4] + "-matr.npz", acc_matr=acc_matr,
+                         githash=expt_githash, args=args, num_iter_done=epoch)
 
         print("[Test Process] Done, total time spent waiting : ",
               test_wait_time)

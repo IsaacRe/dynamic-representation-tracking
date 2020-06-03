@@ -143,9 +143,9 @@ parser.add_argument('--ft_fc_lr', type=float, default=0.002,
 # Matching Feature Correlation Analysis options
 parser.add_argument('--corr_model_type', type=str, choices=['incr, batch'], default='incr',
                     help='Which type of pretrained model to use for correlation analysis')
-parser.add_argument('--corr_model_incr', type=str, default='incr_model-cifar20-model.pth.tar',
+parser.add_argument('--corr_model_incr', type=str, default='',
                     help='Specify IncrNet for feature match correlation')
-parser.add_argument('--corr_model_batch', type=str, default='batch_model/batch_model-cifar20-model.pth.tar',
+parser.add_argument('--corr_model_batch', type=str, default='',
                     help='Specify batch trained model for correlation')
 parser.add_argument('--feat_corr', action='store_true', help='Conduct matching feature correlation analysis')
 parser.add_argument('--sequential_corr', action='store_true', help='Compute correlation between each sequential pair'
@@ -562,7 +562,6 @@ perm_id.insert(0, None)
 # Fix for extra test run at init
 args.num_iters += 1
 
-
 def train_run(device):
     global train_set
     model.cuda(device=device)
@@ -572,6 +571,9 @@ def train_run(device):
     print("####### Train Process Running ########")
     print("Args: ", args)
     train_wait_time = 0
+
+    # Fix for extra test run at init
+    args.num_iters += 1
 
     running_activations = {}
 

@@ -206,11 +206,13 @@ parser.add_argument('--vc_recall', action='store_true', help='Compute recall for
 parser.add_argument('--save_activations', action='store_true', help='Store activations of the final model at the'
                                                                     ' feat_vis layer')
 parser.add_argument('--lr_threshold', type=float, default=0.04, help='Learning rate for threshold learning')
+parser.add_argument('--trainset_eval', action='store_true', help='evaluate on the training set')
 
 # feature ablation analysis
 parser.add_argument('--feature_ablation', action='store_true', help='Perform feature ablation analysis')
 
 parser.add_argument('--resume_iter', type=int, default=None, help='Specify iteration to start testing from')
+parser.add_argument('--id', type=str, default='', help='Validation files (specify for multiple runs)')
 
 # System options
 parser.add_argument("--test_freq", default=1, type=int,
@@ -223,6 +225,10 @@ parser.add_argument("--one_gpu", dest="one_gpu", action="store_true",
                     help="Option to run multiprocessing on 1 GPU")
 parser.add_argument("--debug", action='store_true',
                     help="Set DataLoaders to num_workers=0 for debugging in data iteration loop")
+
+# Batch settings
+parser.add_argument('--batch', action='store_true', help='Model files are from batch run')
+parser.add_argument('--batches_per_epoch', type=int, help='Specify the # batches per epoch')
 
 parser.add_argument('--diff_perm', action='store_true')
 parser.add_argument('--seed', type=int, default=1, help='Set torch and numpy seed')
@@ -265,6 +271,17 @@ def load_model(i, device=0):
     model.from_resnet(args.save_all_dir + '/model_iter_%d.pth.tar' % i, load_fc=True)
     return model
 
+def load_model_batch(i, device=0):
+    itr = i % args.batches_per_epoch
+    epoch = i // args.batches_per_epoch
+    model = IncrNet(args, device=device, cifar=True)
+    model.from_resnet(args.save_all_dir + '/model_epoch_%d_iter_%d.pth.tar' % (epoch, itr),
+                      load_fc=True)
+    return model
+
+if args.batch:
+    load_model = load_model_batch
+
 def reorder_fc(model):
     w = model.fc.weight.data
     w_copy = w.clone()
@@ -281,7 +298,8 @@ def reorder_fc(model):
 
 corr_model = load_model(load_iters[-1])
 corr_model = corr_model.model
-reorder_fc(corr_model)
+if not args.batch:
+    reorder_fc(corr_model)
 corr_model.eval()
 
 # ensure samples is a multiple of num_classes
@@ -408,7 +426,7 @@ def test_run(device):
                                             train_loader=train_loader, ts=args.thresholds_to_validate)
         save = {str(t): acc for t, acc in zip(args.thresholds_to_validate, t_accs)}
         save['baseline'] = ft_acc
-        np.savez('%s-bin-acc.npz' % args.feat_vis_layer_name[-1],
+        np.savez('vc-results/threshold-validation/%s-bin-acc%s.npz' % (args.feat_vis_layer_name[-1], args.id),
                  **save)
 
     ###########################  Feature Ablation Analysis  ##############################################
@@ -418,8 +436,11 @@ def test_run(device):
         f = np.load('%s-coverage.npz' % args.save_all_dir)
         sort_fc(model_, f['classes_seen'], f['model_classes_seen'])
         model_.cuda(device)
-        ablation_scores = test_features(test_all_loader, model_, args.feat_vis_layer_name[-1], device=device)
-        np.save('feat-ablation-scores/%s-feat-ablation.npy' % args.save_all_dir.split('/')[-1], ablation_scores)
+        baseline, ablation_scores = test_features(test_all_loader, model_, args.feat_vis_layer_name[-1], device=device)
+        np.savez('feature-ablation-scores/%s-feat-ablation.npz' % args.save_all_dir.split('/')[-1],
+                 baseline=baseline,
+                 class_acc=ablation_scores,
+                 fc_weight=model_._modules['fc'].weight.data.transpose(1, 0).cpu().numpy())
 
     ###########################  EARLY EXIT  ############################################################
 
@@ -437,9 +458,12 @@ def test_run(device):
         vc_dataset_train = get_vc_dataset(args, corr_model, args.feat_vis_layer_name[-1], all_classes,
                                           balance=args.vc_data_balance,
                                           root='./data', train=True, transform=None, mean_image=mean_image)
-        vc_dataset_test = get_vc_dataset(args, corr_model, args.feat_vis_layer_name[-1], all_classes,
-                                         balance=args.vc_data_balance,
-                                         root='./data', train=False, transform=None, mean_image=mean_image)
+        if not args.trainset_eval:
+            vc_dataset_test = get_vc_dataset(args, corr_model, args.feat_vis_layer_name[-1], all_classes,
+                                             balance=args.vc_data_balance,
+                                             root='./data', train=False, transform=None, mean_image=mean_image)
+        else:
+            vc_dataset_test = vc_dataset_train
         #acc, w = test_vc_accuracy(args, corr_model, args.feat_vis_layer_name[-1], vc_dataset, vc_dataset_test, device=device,
         #                          uniform_init=True, epochs=10)
 
