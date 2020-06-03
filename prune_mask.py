@@ -242,7 +242,7 @@ load_iters = list(range(0, num_iters, test_freq))
 
 def load_model(i, save_all_dir, device=0):
     model = IncrNet(args, device=device, cifar=True)
-    model.from_resnet(save_all_dir + '-saved_models/model_iter_%d.pth.tar' % i, load_fc=True)
+    model.from_resnet(save_all_dir + '/model_iter_%d.pth.tar' % i, load_fc=True)
     return model
 
 def get_sad_acc(mask1, mask2, key):
