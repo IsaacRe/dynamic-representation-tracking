@@ -455,9 +455,9 @@ def test_run(device):
                     class_preds = all_preds[all_labels == i]
                     correct = np.sum(class_preds == i)
                     total = len(class_preds)
-                    acc_matr[i, itr] = (100.0 * correct/total)
+                    acc_matr[i, epoch + itr] = (100.0 * correct/total)
 
-                test_acc = np.mean(acc_matr[:, epoch])
+                test_acc = np.mean(acc_matr[:, epoch + itr])
                 print("%.2f ," % test_acc, file=file)
                 print("[Test Process] =======> Test Accuracy after %d"
                       " learning exposures : " %
@@ -489,6 +489,8 @@ def test_run(device):
 
                 np.savez(args.outfile[:-4] + "-matr.npz", acc_matr=acc_matr,
                          githash=expt_githash, args=args, num_iter_done=epoch)
+
+                file.flush()
 
         print("[Test Process] Done, total time spent waiting : ",
               test_wait_time)
