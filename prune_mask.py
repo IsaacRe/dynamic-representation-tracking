@@ -246,16 +246,16 @@ def load_model(i, save_all_dir, device=0):
     return model
 
 def get_sad_acc(mask1, mask2, key):
-    # print("mask1 shape: ", mask1.shape)
-    # print("mask2 shape: ", mask2.shape)
-    assert(mask1.shape == mask2.shape)
-    length = len(mask1)
+    if mask1.shape == mask2.shape:
+        length = len(mask1)
 
-    diffs = np.abs(mask1-mask2)
-    sum_diff = np.sum(diffs)
+        diffs = np.abs(mask1-mask2)
+        sum_diff = np.sum(diffs)
 
-    # return 100 - (sum_diff/length)*100
-    return 1 - (sum_diff / length)
+        # return 100 - (sum_diff/length)*100
+        return 1 - (sum_diff / length)
+    else:
+            return None
 
 def get_recall(gt, mask):
     if gt.shape == mask.shape:
@@ -265,7 +265,7 @@ def get_recall(gt, mask):
 
         return np.sum(arr) / len(arr)
     else:
-        return 0
+        return None
 
 def get_avg_acc(md1, md2):
     assert(md1.keys() == md2.keys())
@@ -287,11 +287,15 @@ def get_avg_recall(gt_md, md):
         gt = gt_md[key]
         mask = md[key]
         num_params += len(mask)
-        sum_rec += get_recall(gt, mask) * len(mask)
+        recall = get_recall(gt, mask)
+        if recall is not None:
+            sum_rec += recall * len(mask)
+        else:
+            sum_rec += 0
 
     return (sum_rec / num_params) * 100
 
-def prune_mask(i, percent, save_all_dir, mod=None):
+def prune_mask(i, percent, save_all_dir, mod=None, fc=False):
     mask_dicts = {}
     if mod is None:
         model = load_model(i, save_all_dir)
@@ -301,13 +305,22 @@ def prune_mask(i, percent, save_all_dir, mod=None):
     t_sum = 0
 
     for name, param in model.named_parameters():
-        if "weight" in name and "fc" not in name:
-            alive = param.data.cpu().numpy()
-            alive = alive[np.nonzero(alive)]
+        if fc:
+            if "weight" in name and "fc" not in name:
+                alive = param.data.cpu().numpy()
+                alive = alive[np.nonzero(alive)]
 
-            threshold = np.percentile(abs(alive), percent, interpolation="midpoint")
-            mask = np.where(abs(alive) < threshold, 0, 1)
-            mask_dicts[name] = mask
+                threshold = np.percentile(abs(alive), percent, interpolation="midpoint")
+                mask = np.where(abs(alive) < threshold, 0, 1)
+                mask_dicts[name] = mask
+        else:
+            if "weight" in name and "fc" in name:
+                alive = param.data.cpu().numpy()
+                alive = alive[np.nonzero(alive)]
+
+                threshold = np.percentile(abs(alive), percent, interpolation="midpoint")
+                mask = np.where(abs(alive) < threshold, 0, 1)
+                mask_dicts[name] = mask
 
     return mask_dicts
 
@@ -332,13 +345,24 @@ def total_accs(percent, save_all_dir, total=5000, freq=10):
 
     return np.array(accs)
 
-def total_data(percent, save_all_dir, total=5000, freq=10):
+def total_recs(percent, save_all_dir, total=5000, freq=10):
+    final_md = prune_mask(total-freq, percent, save_all_dir)
+    recs = []
+
+    for i in range(0, total, freq):
+        md = prune_mask(i, percent, save_all_dir)
+        rec = get_avg_recall(final_md, md)
+        recs.append(rec)
+
+    return np.array(recs)
+
+def total_data(percent, save_all_dir, total=5000, freq=10, fc=False):
     final_md = prune_mask(total-freq, percent, save_all_dir)
     accs = []
     recs = []
 
     for i in range(0, total, freq):
-        md = prune_mask(i, percent, save_all_dir)
+        md = prune_mask(i, percent, save_all_dir, fc)
         acc = get_avg_acc(final_md, md)
         rec = get_avg_recall(final_md, md)
         accs.append(acc)
@@ -386,6 +410,7 @@ def main():
     test_freq = 10
     # save_all_dir1 = "/Scratchspace/irehg6/incr-runs/2class_400explr_500sample_1epoch"
     # save_all_dir2 = "/Scratchspace/irehg6/incr-runs/2class_400explr_500sample_1epoch_pt"
+    
     save_all_dir1 = "/Scratchspace/irehg6/incr-runs/2class_1explr_500sample_1epoch_pt"
     save_all_dir2 = "/Data/irehg6/incr-runs/2class_1explr_500sample_1epoch_pt"
 
@@ -395,71 +420,23 @@ def main():
     save_all_dir5 = "/Scratchspace/irehg6/incr-runs/1class_1explr_500sample_1epoch_pt"
     save_all_dir6 = "/Data/irehg6/incr-runs/1class_1explr_500sample_1epoch_pt"
 
-    # accs1, recs1 = total_data(percent, save_all_dir1, total_iter, test_freq)
-    # accs2, recs2 = total_data(percent, save_all_dir2, total_iter, test_freq)
+    recs1 = total_recs(percent, save_all_dir1, total_iter, test_freq, fc=True)
+    recs2 = total_recs(percent, save_all_dir2, total_iter, test_freq, fc=True)
+    avg1 = (recs1 + recs2) / 2
 
-    # accs3, recs3 = total_data(percent, save_all_dir3, total_iter, test_freq)
-    # accs4, recs4 = total_data(percent, save_all_dir4, total_iter, test_freq)
+    recs3 = total_recs(percent, save_all_dir3, total_iter, test_freq, fc=True)
+    recs4 = total_recs(percent, save_all_dir4, total_iter, test_freq, fc=True)
+    avg2 = (recs3 + recs4) / 2
 
-    # accs5, recs5 = total_data(percent, save_all_dir5, total_iter, test_freq)
-    # accs6, recs6 = total_data(percent, save_all_dir6, total_iter, test_freq)
+    recs5 = total_recs(percent, save_all_dir5, total_iter, test_freq, fc=True)
+    recs6 = total_recs(percent, save_all_dir6, total_iter, test_freq, fc=True)
+    avg3 = (recs5 + recs6) / 2
 
-    accs1 = total_accs(percent, save_all_dir1, total_iter, test_freq)
-    accs2 = total_accs(percent, save_all_dir2, total_iter, test_freq)
-    accs3 = total_accs(percent, save_all_dir3, total_iter, test_freq)
-    accs4 = total_accs(percent, save_all_dir4, total_iter, test_freq)
-    accs5 = total_accs(percent, save_all_dir5, total_iter, test_freq)
-    accs6 = total_accs(percent, save_all_dir6, total_iter, test_freq)
+    np.save("avg1.npy", avg1)
+    np.save("avg2.npy", avg2)
+    np.save("avg3.npy", avg3)
 
-    accs_avg1 = (accs1 + accs2) / 2
-    accs_avg2 = (accs3 + accs4) / 2
-    accs_avg3 = (accs5 + accs6) / 2
-    # accs1 = total_accs(percent, save_all_dir1, total_iter, test_freq)
-    # accs2 = total_accs(percent, save_all_dir2, total_iter, test_freq)
 
-    xs = [i for i in range(0, total_iter, test_freq)]
-    xticks = [i for i in range(0, total_iter, 200)]
-
-    sns.set()
-    sns.set_palette("deep")
-    plt.plot(xs, accs_avg1, label="2 classes, 1 exemplar")
-    plt.plot(xs, accs_avg2, label="2 classes, 0 exemplar")
-    plt.plot(xs, accs_avg3, label="1 class, 1 exemplar")
-    # plt.plot(xs, accs1, label="Random Init")
-    # plt.plot(xs, accs2, label="Pretrained")
-    plt.xlabel("Iterations")
-    plt.ylabel("Accuracy")
-    plt.xticks(xticks)
-    plt.legend()
-    # plt.plot(xs, accs, label="accuracy")
-    # plt.plot(xs, recs, label="recall")
-    # plt.xlabel("Iterations")
-    # plt.ylabel("Percentage")
-    # plt.xticks(xticks)
-    # plt.legend()
-    # plt.savefig("prune.png")
-    # fig, (ax1, ax2) = plt.subplots(1, 2)
-    # fig.suptitle("Pruning Accuracy vs Recall Average")
-    # ax1.plot(xs, accs_avg1, label="set 1")
-    # ax1.plot(xs, accs_avg2, label="set 2")
-    # ax1.plot(xs, accs_avg3, label="set 3")
-    # ax2.plot(xs, recs_avg1, label="set 1")
-    # ax2.plot(xs, recs_avg2, label="set 2")
-    # ax2.plot(xs, recs_avg3, label="set 3")
-    # ax2.set_xlabel("Iterations")
-
-    # ax2.set_xticks(xticks)
-    # ax2.set_xticklabels(xticks, rotation=50, ha="right")
-    # ax1.set_xticks(xticks)
-    # ax1.set_xticklabels(xticks, rotation=50, ha="right")
-
-    # ax1.set_ylabel("Accuracy")
-    # ax2.set_ylabel("Recall")
-    # ax1.legend()
-    # ax2.legend()
-    # fig.show()
-    # fig.savefig("prune.png")
-    plt.savefig("prune.png")
 
 if __name__ == "__main__":
     main()
