@@ -280,6 +280,9 @@ def get_avg_acc(md1, md2):
     return (sum_acc / num_params) * 100
 
 def get_avg_recall(gt_md, md):
+    if gt_md.keys() != md.keys():
+        print("gt: ", gt_md.keys())
+        print("md: ", md.keys())
     assert(gt_md.keys() == md.keys())
     sum_rec = 0
     num_params = 0
@@ -345,12 +348,12 @@ def total_accs(percent, save_all_dir, total=5000, freq=10):
 
     return np.array(accs)
 
-def total_recs(percent, save_all_dir, total=5000, freq=10):
-    final_md = prune_mask(total-freq, percent, save_all_dir)
+def total_recs(percent, save_all_dir, total=5000, freq=10, fc=False):
+    final_md = prune_mask(total-freq, percent, save_all_dir, mod=None, fc=fc)
     recs = []
 
     for i in range(0, total, freq):
-        md = prune_mask(i, percent, save_all_dir)
+        md = prune_mask(i, percent, save_all_dir, mod=None, fc=fc)
         rec = get_avg_recall(final_md, md)
         recs.append(rec)
 
@@ -406,36 +409,13 @@ def get_metrics_total(percent, total=5000, freq=10):
 
 def main():
     percent = 90
-    total_iter = 1000
+    total_iter = 3490
     test_freq = 10
-    # save_all_dir1 = "/Scratchspace/irehg6/incr-runs/2class_400explr_500sample_1epoch"
-    # save_all_dir2 = "/Scratchspace/irehg6/incr-runs/2class_400explr_500sample_1epoch_pt"
-    
-    save_all_dir1 = "/Scratchspace/irehg6/incr-runs/2class_1explr_500sample_1epoch_pt"
-    save_all_dir2 = "/Data/irehg6/incr-runs/2class_1explr_500sample_1epoch_pt"
+    save_all_dir = "/Scratchspace/irehg6/incr-runs/2class_400explr_500sample_1epoch"
 
-    save_all_dir3 = "/Scratchspace/irehg6/incr-runs/2class_0explr_500sample_1epoch_pt"
-    save_all_dir4 = "/Data/irehg6/incr-runs/2class_0explr_500sample_1epoch_pt"
+    recs = total_recs(percent, save_all_dir, total_iter, test_freq, fc=True)
 
-    save_all_dir5 = "/Scratchspace/irehg6/incr-runs/1class_1explr_500sample_1epoch_pt"
-    save_all_dir6 = "/Data/irehg6/incr-runs/1class_1explr_500sample_1epoch_pt"
-
-    recs1 = total_recs(percent, save_all_dir1, total_iter, test_freq, fc=True)
-    recs2 = total_recs(percent, save_all_dir2, total_iter, test_freq, fc=True)
-    avg1 = (recs1 + recs2) / 2
-
-    recs3 = total_recs(percent, save_all_dir3, total_iter, test_freq, fc=True)
-    recs4 = total_recs(percent, save_all_dir4, total_iter, test_freq, fc=True)
-    avg2 = (recs3 + recs4) / 2
-
-    recs5 = total_recs(percent, save_all_dir5, total_iter, test_freq, fc=True)
-    recs6 = total_recs(percent, save_all_dir6, total_iter, test_freq, fc=True)
-    avg3 = (recs5 + recs6) / 2
-
-    np.save("avg1.npy", avg1)
-    np.save("avg2.npy", avg2)
-    np.save("avg3.npy", avg3)
-
+    np.save("recs.npy", recs)
 
 
 if __name__ == "__main__":
