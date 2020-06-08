@@ -265,7 +265,7 @@ def get_recall(gt, mask):
 
         return np.sum(arr) / len(arr)
     else:
-        return None
+        return np.NaN
 
 def get_avg_acc(md1, md2):
     assert(md1.keys() == md2.keys())
@@ -291,10 +291,11 @@ def get_avg_recall(gt_md, md):
         mask = md[key]
         num_params += len(mask)
         recall = get_recall(gt, mask)
-        if recall is not None:
-            sum_rec += recall * len(mask)
-        else:
-            sum_rec += 0
+        sum_rec += recall * len(mask)
+        # if recall is not None:
+            # sum_rec += recall * len(mask)
+        # else:
+            # sum_rec += 0
 
     return (sum_rec / num_params) * 100
 
@@ -308,7 +309,7 @@ def prune_mask(i, percent, save_all_dir, mod=None, fc=False):
     t_sum = 0
 
     for name, param in model.named_parameters():
-        if fc:
+        if not fc:
             if "weight" in name and "fc" not in name:
                 alive = param.data.cpu().numpy()
                 alive = alive[np.nonzero(alive)]
