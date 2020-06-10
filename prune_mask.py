@@ -336,7 +336,10 @@ def prune_mask(i, percent, save_all_dir, mod=None, fc=False, compute_std=False):
                 mask = np.where(abs(alive) < threshold, 0, 1)
                 mask_dicts[name] = mask
 
-    return mask_dicts, stds
+    if compute_std:
+        return mask_dicts, stds
+    
+    return mask_dicts
 
 def store_prune_mask_model(model, percent, save_all_dir):
     mask_dicts = prune_mask(0, percent, model)
@@ -389,7 +392,9 @@ def total_std(percent, save_all_dir, total=5000, freq=10):
     maxes = []
     
     for i in range(0, total, freq):
-        _, stds = prune_mask(i, percent, save_all_dir, fc)
+        if i % 100 == 0:
+            print(i)
+        _, stds = prune_mask(i, percent, save_all_dir, fc=False, compute_std=True)
         means.append(np.mean(stds))
         maxes.append(np.max(stds))
     
@@ -431,18 +436,18 @@ def get_metrics_total(percent, total=5000, freq=10):
 
 def main():
     percent = 90
-    total_iter = 3490
-    test_freq = 10
+    total_iter = 5000
+    test_freq = 20
     # save_all_dir = "/Scratchspace/irehg6/incr-runs/2class_400explr_500sample_1epoch"
 
-    save_all_dir = "/home/julian/Dropbox/experiments/saved_models/2class_1explr_500sample_1epoch-saved_models"
+    save_all_dir = args.save_all_dir
 
     # mask, stds = prune_mask(1990, 90, save_all_dir, compute_std=True)
 
-    means, maxes = total_std(90, save_all_dir, total=total_iter, freq=test_freq)
+    # means, maxes = total_std(90, save_all_dir, total=total_iter, freq=test_freq)
 
-    np.save("std_mean.npy", means)
-    np.save("std_max.npy", maxes)
+    # np.save("std_mean.npy", means)
+    # np.save("std_max.npy", maxes)
 
 
     # model = load_model(1980, save_all_dir)
@@ -450,9 +455,11 @@ def main():
 
 
 
-    # recs = total_recs(percent, save_all_dir, total_iter, test_freq, fc=True)
+    fc = total_recs(percent, save_all_dir, total_iter, test_freq, fc=True)
+    nonfc = total_recs(percent, save_all_dir, total_iter, test_freq, fc=False)
 
-    # np.save("recs.npy", recs)
+    np.save("cifar20_nonfc.npy", nonfc)
+    np.save("cifar20_fc.npy", fc)
 
 
 if __name__ == "__main__":
