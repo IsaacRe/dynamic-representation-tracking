@@ -299,7 +299,11 @@ def get_avg_recall(gt_md, md):
 
     return (sum_rec / num_params) * 100
 
-def prune_mask(i, percent, save_all_dir, mod=None, fc=False):
+def prune_mask(i, percent, save_all_dir, mod=None, fc=False, compute_std=False):
+
+    if compute_std:
+        stds = []
+
     mask_dicts = {}
     if mod is None:
         model = load_model(i, save_all_dir)
@@ -317,6 +321,12 @@ def prune_mask(i, percent, save_all_dir, mod=None, fc=False):
                 threshold = np.percentile(abs(alive), percent, interpolation="midpoint")
                 mask = np.where(abs(alive) < threshold, 0, 1)
                 mask_dicts[name] = mask
+
+                # compute std
+                if compute_std and "conv" in name:
+                    orig_shape = mask.reshape(param.shape[0], np.product(param.shape[1:]))
+                    orig_shape = np.sum(orig_shape, axis=1)
+                    stds.append(np.std(orig_shape))
         else:
             if "weight" in name and "fc" in name:
                 alive = param.data.cpu().numpy()
@@ -326,7 +336,7 @@ def prune_mask(i, percent, save_all_dir, mod=None, fc=False):
                 mask = np.where(abs(alive) < threshold, 0, 1)
                 mask_dicts[name] = mask
 
-    return mask_dicts
+    return mask_dicts, stds
 
 def store_prune_mask_model(model, percent, save_all_dir):
     mask_dicts = prune_mask(0, percent, model)
@@ -374,6 +384,17 @@ def total_data(percent, save_all_dir, total=5000, freq=10, fc=False):
 
     return accs, recs
 
+def total_std(percent, save_all_dir, total=5000, freq=10):
+    means = []
+    maxes = []
+    
+    for i in range(0, total, freq):
+        _, stds = prune_mask(i, percent, save_all_dir, fc)
+        means.append(np.mean(stds))
+        maxes.append(np.max(stds))
+    
+    return np.array(means), np.array(maxes)
+
 def get_metric(prev, curr, final):
     m1 = 0
     m2 = 0
@@ -412,11 +433,26 @@ def main():
     percent = 90
     total_iter = 3490
     test_freq = 10
-    save_all_dir = "/Scratchspace/irehg6/incr-runs/2class_400explr_500sample_1epoch"
+    # save_all_dir = "/Scratchspace/irehg6/incr-runs/2class_400explr_500sample_1epoch"
 
-    recs = total_recs(percent, save_all_dir, total_iter, test_freq, fc=True)
+    save_all_dir = "/home/julian/Dropbox/experiments/saved_models/2class_1explr_500sample_1epoch-saved_models"
 
-    np.save("recs.npy", recs)
+    # mask, stds = prune_mask(1990, 90, save_all_dir, compute_std=True)
+
+    means, maxes = total_std(90, save_all_dir, total=total_iter, freq=test_freq)
+
+    np.save("std_mean.npy", means)
+    np.save("std_max.npy", maxes)
+
+
+    # model = load_model(1980, save_all_dir)
+
+
+
+
+    # recs = total_recs(percent, save_all_dir, total_iter, test_freq, fc=True)
+
+    # np.save("recs.npy", recs)
 
 
 if __name__ == "__main__":
