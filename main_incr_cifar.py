@@ -177,7 +177,7 @@ parser.add_argument('--should_prune', action='store_true',
                     help='Actually performs pruning as opposed to just computing the masks')
 parser.add_argument('--final_prune', action='store_true',
                     help='Perform pruning during training using final mask from another run')
-parser.add_argument('--prune_savel_all_dir', type=str, default=None)
+parser.add_argument('--prune_save_all_dir', type=str, default=None)
 parser.add_argument('--prune_final_iter', type=int, default=None)
 parser.add_argument('--save_pruned_path', type=str, default='prune_masks.npz',
                     help='Save path for computed prune masks')
@@ -589,7 +589,6 @@ def train_run(device):
             classes_seen.append(None)
 
             if args.final_prune:
-                assert(args.final_model_path is not None)
                 # populate_with_previous_init(model, args.prune_final_iter, args.prune_save_all_dir)
                 model.populate_with_previous_init()
                 store_prune_mask(args.prune_final_iter, 90, args.prune_save_all_dir)

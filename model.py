@@ -544,20 +544,19 @@ class IncrNet(nn.Module):
         assert(self.final_prune)
         prev_model = "%s/model_iter_0.pth.tar" % self.prune_save_all_dir
         # prev_model = load_model(0, self.prune_save_all_dir)
-        self.from_resnet(prev_model, load_fc=True)
-        for key in self.state_dict().keys():
-            self.state_dict()[key] = prev_model.state_dict()[key]
+        self.from_resnet(prev_model, load_fc=False)
 
     def get_final_mask_dict(self):
         if self.mask_dict is None:
             path = "%s/model_iter_%d.npz" % (self.prune_save_all_dir, self.prune_final_iter)
+            md = {}
             mask_dict = np.load(path)
             for name, mask in mask_dict.items():
                 reshaped_mask = mask.reshape(self.state_dict()[name].shape)
                 reshaped_mask = np.invert(reshaped_mask)
                 reshaped_mask = torch.from_numpy(reshaped_mask).to(self.device)
-                mask_dict[name] = reshaped_mask
-            self.mask_dict = mask_dict
+                md[name] = reshaped_mask
+            self.mask_dict = md
             
         return self.mask_dict
 
@@ -710,12 +709,11 @@ class IncrNet(nn.Module):
 
                 optimizer.step()
                 if self.final_prune:
-                    assert(self.final_model_path is not None)
-                    for name, mask in self.get_final_mask_dict().items:
-                        self.state_dict[name].data[mask] = 0
+                    for name, mask in self.get_final_mask_dict().items():
+                        self.state_dict()[name].data[mask] = 0
                 elif self.should_prune:
                     for name, mask in self.get_mask_dict().items():
-                        self.state_dict[name].data[mask] = 0
+                        self.state_dict()[name].data[mask] = 0
 
                 tqdm.write('Epoch [%d/%d], Minibatch [%d/%d] Loss: %.4f' 
                            % (epoch, self.num_epoch, 

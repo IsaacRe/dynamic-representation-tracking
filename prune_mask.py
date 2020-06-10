@@ -176,6 +176,10 @@ parser.add_argument('--present_vc_threshold', type=float, default=1.0,
                          'considered present')
 parser.add_argument('--should_prune', action='store_true',
                     help='Actually performs pruning as opposed to just computing the masks')
+parser.add_argument('--final_prune', action='store_true',
+                    help='Perform pruning during training using final mask from another run')
+parser.add_argument('--prune_save_all_dir', type=str, default=None)
+parser.add_argument('--prune_final_iter', type=int, default=None)
 parser.add_argument('--save_pruned_path', type=str, default='prune_masks.npz',
                     help='Save path for computed prune masks')
 parser.add_argument('--load_pruned_path', type=str, default='prune_masks.npz',
@@ -346,7 +350,7 @@ def store_prune_mask_model(model, percent, save_all_dir):
     np.savez("%s/model_iter_%d.npz" % (save_all_dir, 0), **mask_dicts)
 
 def store_prune_mask(i, percent, save_all_dir):
-    mask_dicts = prune_mask(i, percent)
+    mask_dicts = prune_mask(i, percent, save_all_dir)
     np.savez("%s/model_iter_%d.npz" % (save_all_dir, i), **mask_dicts)
     # with open("%s/model_iter_%d.pkl" % (save_all_dir, i), "wb") as f:
         # pickle.dump(mask_dicts, f, pickle.HIGHEST_PROTOCOL)

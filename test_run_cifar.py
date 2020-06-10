@@ -173,6 +173,10 @@ parser.add_argument('--present_vc_threshold', type=float, default=1.0,
                          'considered present')
 parser.add_argument('--should_prune', action='store_true',
                     help='Actually performs pruning (as opposed to just computing the masks)')
+parser.add_argument('--final_prune', action='store_true',
+                    help='Perform pruning during training using final mask from another run')
+parser.add_argument('--prune_savel_all_dir', type=str, default=None)
+parser.add_argument('--prune_final_iter', type=int, default=None)
 parser.add_argument('--save_pruned_path', type=str, default='prune_masks.npz',
                     help='Save path for computed prune masks')
 parser.add_argument('--load_pruned_path', type=str, default='prune_masks.npz',
