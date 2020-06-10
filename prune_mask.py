@@ -342,7 +342,7 @@ def prune_mask(i, percent, save_all_dir, mod=None, fc=False, compute_std=False):
     return mask_dicts
 
 def store_prune_mask_model(model, percent, save_all_dir):
-    mask_dicts = prune_mask(0, percent, model)
+    mask_dicts = prune_mask(0, percent, mod=model)
     np.savez("%s/model_iter_%d.npz" % (save_all_dir, 0), **mask_dicts)
 
 def store_prune_mask(i, percent, save_all_dir):
