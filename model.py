@@ -10,7 +10,6 @@ from utils.loader_utils import CustomRandomSampler
 from utils.loader_utils import CustomBatchSampler
 from utils.model_utils import kaiming_normal_init
 from utils.model_utils import MultiClassCrossEntropyLoss
-from prune_mask import load_model
 import os
 import pickle
 
@@ -543,8 +542,9 @@ class IncrNet(nn.Module):
                 
     def populate_with_previous_init(self):
         assert(self.final_prune)
-        # prev_model = "%s/model_iter_0.pth.tar" % self.prune_save_all_dir
-        prev_model = load_model(0, self.prune_save_all_dir)
+        prev_model = "%s/model_iter_0.pth.tar" % self.prune_save_all_dir
+        # prev_model = load_model(0, self.prune_save_all_dir)
+        self.from_resnet(prev_model, load_fc=True)
         for key in self.state_dict().keys():
             self.state_dict()[key] = prev_model.state_dict()[key]
 
