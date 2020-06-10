@@ -480,7 +480,7 @@ test_counter = mp.Value("i", num_iters_done)
 
 # expanding test set to everything seen earlier
 expanded = set()
-for mdl_cl, gt_cl in zip(model_classes_seen, classes_seen):
+for mdl_cl, gt_cl in zip(model_classes_seen[1:], classes_seen):
     if len(expanded) >= total_classes:
         break
     """
@@ -495,6 +495,7 @@ for mdl_cl, gt_cl in zip(model_classes_seen, classes_seen):
         test_set.expand([mdl_cl_], [gt_cl_])
         expanded = expanded.union({gt_cl_})
 
+assert len(set(test_set.test_labels)) == model.n_known
 model_ = model
 model = IncrNet(args, train_device, cifar=True)
 model.num_iters_done = model_.num_iters_done

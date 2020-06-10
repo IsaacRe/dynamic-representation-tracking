@@ -233,6 +233,9 @@ parser.add_argument('--batches_per_epoch', type=int, help='Specify the # batches
 parser.add_argument('--diff_perm', action='store_true')
 parser.add_argument('--seed', type=int, default=1, help='Set torch and numpy seed')
 
+parser.add_argument('--expand_test_outfile', type=str, default=None)
+parser.add_argument('--skip_reorder', action='store_true')
+
 parser.set_defaults(ncm=False)
 parser.set_defaults(dist=False)
 parser.set_defaults(pretrained=True)
@@ -298,7 +301,7 @@ def reorder_fc(model):
 
 corr_model = load_model(load_iters[-1])
 corr_model = corr_model.model
-if not args.batch:
+if not args.batch and not args.skip_reorder:
     reorder_fc(corr_model)
 corr_model.eval()
 
@@ -392,6 +395,31 @@ if args.feat_corr:
     save_data += ['Feat_match_correlation', 'Correlation_time']
 writer = CSVWriter(args.outfile, *save_data)
 
+if args.test_saved:
+    assert args.expand_test_outfile is not None
+    info_coverage = np.load("%s-coverage.npz" \
+                            % os.path.splitext(args.expand_test_outfile)[0])
+    model_classes_seen = list(
+        info_coverage["model_classes_seen"])
+    classes_seen = list(info_coverage["classes_seen"])[1:]
+
+    expanded = set()
+    for mdl_cl, gt_cl in zip(model_classes_seen[1:], classes_seen):
+        if len(expanded) >= total_classes:
+            break
+        """
+        # expanding test set to everything seen earlier
+        for i, (mdl_cl, gt_cl) in enumerate(zip(model_classes_seen, classes_seen)):
+            if mdl_cl not in model_classes_seen[:i]:
+        """
+        for mdl_cl_, gt_cl_ in zip(mdl_cl, gt_cl):
+            if gt_cl_ in expanded:
+                continue
+            print("Expanding class for resuming : %d, %d" % (mdl_cl_, gt_cl_))
+            test_set.expand([mdl_cl_], [gt_cl_])
+            expanded = expanded.union({gt_cl_})
+
+    assert len(set(test_set.test_labels)) == 20
 
 def test_run(device):
     global test_set
@@ -501,6 +529,8 @@ def test_run(device):
             test_model = load_model(s)
             test_model.device = device
             test_model.cuda(device=device)
+            if args.test_saved:
+                test_model.n_known = 20
             test_model.eval()
 
             if args.test_saved:
@@ -667,14 +697,14 @@ def test_run(device):
                 np.save('%s-fc-matr.npz' % os.path.splitext(args.outfile)[0],
                         acc_matr_fc)
 
-                np.savez('%s-matr.npz' % os.path.splitext(args.outfile)[0],
-                         acc_matr=acc_matr,
-                         model_hyper_params=test_model.fetch_hyper_params(),
-                         args=args, num_iters_done=s)
 
                 # Track ft-fc runtime (in eons lmao)
                 ftfc_time = time.time() - start_time
                 writer.write(FTFC_accuracy=test_acc, FTFC_time=ftfc_time)
+            np.savez('%s-matr.npz' % os.path.splitext(args.outfile)[0],
+                     acc_matr=acc_matr,
+                     model_hyper_params=test_model.fetch_hyper_params(),
+                     args=args, num_iters_done=s)
 
         print("[Test Process] Done, total time spent waiting : ",
               test_wait_time)
