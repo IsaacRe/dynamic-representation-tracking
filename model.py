@@ -539,6 +539,11 @@ class IncrNet(nn.Module):
                 'pretrained': self.pretrained,
                 'momentum': self.momentum,
                 'weight_decay': self.weight_decay}
+                
+    def populate_with_previous_init(self):
+        assert(self.final_prune)
+        prev_model = "%s/model_iter_0.pth.tar" % self.prune_save_all_dir
+        self.state_dict = prev_model.state_dict
 
     def get_final_mask_dict(self):
         if self.mask_dict is None:

@@ -590,6 +590,8 @@ def train_run(device):
 
             if args.final_prune:
                 assert(args.final_model_path is not None)
+                # populate_with_previous_init(model, args.prune_final_iter, args.prune_save_all_dir)
+                model.populate_with_previous_init()
                 store_prune_mask(args.prune_final_iter, 90, args.prune_save_all_dir)
             elif args.should_prune:
                 store_prune_mask_model(model, 80, args.save_all_dir)
