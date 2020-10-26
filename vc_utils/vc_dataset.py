@@ -4,6 +4,7 @@ from time import time
 import torchvision
 import torchvision.transforms as transforms
 import torch
+import torch.nn.functional as F
 import numpy as np
 from tqdm.auto import tqdm
 from dataset_batch_cifar import CIFAR20
@@ -47,11 +48,54 @@ def test_threshold_acc(args, test_loader, model, layer_name, train_loader=None, 
                                    lr=args.lr_threshold, lr_ft=args.ft_fc_lr)
 
 
+def compute_corr(loader, model, act_tracker, module_name, device):
+    print('Computing mean')
+    mean = np.zeros(512)
+    total = 0
+    for i, img, valid, lbl in tqdm(loader):
+        with act_tracker.track_all_context():
+            model(img.to(device))
+            activations = act_tracker.get_module_activations(module_name, cpu=False)
+            mean = mean + activations[:,:,0,0].sum(dim=0).cpu().numpy()
+            total += img.shape[0]
+    mean = mean / total
+    pass
+
+    print('Computing correlation matrix')
+    var = np.zeros(512)
+    corr = np.zeros((512, 512))
+    total = 0
+    for i, img, valid, lbl in tqdm(loader):
+        with act_tracker.track_all_context():
+            model(img.to(device))
+            activations = act_tracker.get_module_activations(module_name, cpu=False)
+
+            # compute var
+            deviation = activations[:,:,0,0].cpu().numpy() - mean[None]
+            var = var + (deviation ** 2).sum(axis=0)
+            total += img.shape[0]
+
+            # compute correlation
+            corr = corr + deviation.T.dot(deviation)
+
+    # compute var
+    var = var / total
+    stds = np.sqrt(var)
+    stds = stds[:,None].dot(stds[None])
+
+    # compute corr
+    corr = corr / total
+    corr = corr / stds
+
+    pass
+
+
 def train_classification_layer_v1(args, network, module_name, vc_dset, device=0, act_tracker=None,
                                   classification_layer=None, uniform_init=False):
     if act_tracker is None:
         act_tracker = ActivationTracker(module_names=[module_name], network=network, store_on_gpu=True)
     in_dim = 512
+    normalize = False
     if classification_layer is None:
         uniform_init = 1/512 if uniform_init else None
         classification_layer = VCLogitLayer(in_dim, vc_dset.kept_idxs, uniform_init=uniform_init,
@@ -60,9 +104,8 @@ def train_classification_layer_v1(args, network, module_name, vc_dset, device=0,
     bce = torch.nn.BCEWithLogitsLoss(reduction='none')
     filter_weights = None
     weights = None
-    optim = torch.optim.Adam(classification_layer.parameters(), lr=args.lr_vc)
-    train_loader = vc_dset.get_loader(args.batch_size_train_vc)
-    pbar = tqdm(len(train_loader))
+    optim = torch.optim.Adam(classification_layer.parameters(), lr=0.03)
+    train_loader = vc_dset.get_loader(args.batch_size_train_vc, shuffle=True)
 
     """
     # DEBUG
@@ -81,16 +124,29 @@ def train_classification_layer_v1(args, network, module_name, vc_dset, device=0,
     new_mean = []
     args.vc_epochs = len(diag_vs)
     # END DEBUG"""
-    num_epochs = 1
+    #compute_corr(train_loader, network, act_tracker, module_name, device)
+
+    num_epochs = 5
+    pbar = tqdm(len(train_loader) * num_epochs)
+    losses = []
     for e in range(num_epochs):
+
+        if e == 4:
+            optim = torch.optim.Adam(classification_layer.parameters(), lr=0.005)
 
         """
         # DEBUG
         set_diag(diag_vs[e])
         # END DEBUG
         """
+        vc_pos_count = np.zeros(512)
+        vc_total = 0
 
         for i, img, valid, vc_lbl in train_loader:
+
+            vc_pos_count = vc_pos_count + vc_lbl[:,:,0,0].sum(dim=0).cpu().numpy()
+            vc_total += img.shape[0]
+
             if filter_weights is None:
                 filter_weights = vc_dset.filter_weights[None, :, None, None].repeat(vc_lbl.shape[0], 1,
                                                                                     *vc_lbl.shape[2:]).to(device)
@@ -104,6 +160,7 @@ def train_classification_layer_v1(args, network, module_name, vc_dset, device=0,
             weights[:] = 1.0
             weights[vc_lbl == 1.0] = filter_weights[vc_lbl == 1.0]
             loss = (loss * weights)[valid].mean()  # only use valid localities in framing loss
+            losses += [loss.item()]
             loss.backward()
             optim.step()
             optim.zero_grad()
@@ -117,6 +174,7 @@ def train_classification_layer_v1(args, network, module_name, vc_dset, device=0,
         new_mean += [classification_layer.conv1x1.weight[:, k, 0, 0].diagonal().mean().item()]
         # END DEBUG
         """
+    np.save('vc_count.npy', vc_pos_count)
     pbar.close()
 
     return classification_layer
@@ -128,9 +186,10 @@ def test_vc_accuracy_v1(args, network, module_name, vc_dset_train, vc_dset_test,
         act_tracker = ActivationTracker(module_names=[module_name], network=network, store_on_gpu=True)
     if classification_layer is None:
         if train:
-            classification_layer = train_classification_layer_v1(args, network, module_name, vc_dset_train,
-                                                                 device=device, act_tracker=act_tracker,
-                                                                 uniform_init=uniform_init)
+            while True:
+                classification_layer = train_classification_layer_v1(args, network, module_name, vc_dset_train,
+                                                                     device=device, act_tracker=act_tracker,
+                                                                     uniform_init=uniform_init)
             classification_layer.set_vc_idxs(vc_dset_test.kept_idxs)
         else:
             in_dim = 512
@@ -354,6 +413,48 @@ class NullVisualConceptDataset:
 
 class VCLogitLayer(torch.nn.Module):
 
+    def __init__(self, in_dim, vc_idxs, threshold_estimate=0.5, uniform_init=None, normalize=False):
+        super(VCLogitLayer, self).__init__()
+        self.weight = torch.nn.Parameter(torch.zeros(in_dim, in_dim, 1, 1))
+        self.threshold = threshold_estimate
+        self.vc_idxs = vc_idxs
+        self.normalize = normalize
+
+        if uniform_init is None:
+            # initialize layer weights with best guess under assumption that activations never change
+            for idx in vc_idxs:
+                self.weight.data[idx, idx, :, :] = 1.0
+        else:
+            self.weight.data.fill_(uniform_init)
+
+        #self.bias.data[:] = -threshold_estimate
+
+    def forward(self, x):
+        # normalize
+        if self.normalize:
+            x = x / x.abs().max(dim=0)[0]
+        #w = F.softmax(self.weight, dim=1)
+        return F.conv2d(x, self.weight) - self.threshold
+        #return self.conv1x1(x)[:, self.vc_idxs]
+
+    def set_vc_idxs(self, vc_idxs):
+        self.vc_idxs = vc_idxs
+
+    @property
+    def vc_identiy(self):
+        return self.weight[np.arange(512), self.vc_idxs, 0, 0]
+
+    @property
+    def vc_weight(self):
+        return self.weight[:, :, 0, 0]
+
+    @property
+    def vc_threshold(self):
+        return self.threshold
+
+
+class VCLogitLayer_(torch.nn.Module):
+
     def __init__(self, in_dim, vc_idxs, threshold_estimate=0.5, uniform_init=None):
         super(VCLogitLayer, self).__init__()
         self.conv1x1 = torch.nn.Conv2d(in_channels=in_dim, out_channels=in_dim, kernel_size=1)
@@ -377,7 +478,7 @@ class VCLogitLayer(torch.nn.Module):
 
     @property
     def vc_identiy(self):
-        return self.conv1x1.weight[:, self.vc_idxs, 0, 0]
+        return self.conv1x1.weight[np.arange(512), self.vc_idxs, 0, 0]
 
     @property
     def vc_weight(self):
