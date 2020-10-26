@@ -207,6 +207,7 @@ parser.add_argument('--save_activations', action='store_true', help='Store activ
                                                                     ' feat_vis layer')
 parser.add_argument('--lr_threshold', type=float, default=0.04, help='Learning rate for threshold learning')
 parser.add_argument('--trainset_eval', action='store_true', help='evaluate on the training set')
+parser.add_argument('--final_model', type=str, default=None, help='specify different final model to be used')
 
 # feature ablation analysis
 parser.add_argument('--feature_ablation', action='store_true', help='Perform feature ablation analysis')
@@ -274,6 +275,11 @@ def load_model(i, device=0):
     model.from_resnet(args.save_all_dir + '/model_iter_%d.pth.tar' % i, load_fc=True)
     return model
 
+def load_final_model(device=0):
+    model = IncrNet(args, device=device, cifar=True)
+    model.from_resnet(args.final_model, load_fc=True)
+    return model
+
 def load_model_batch(i, device=0):
     itr = i % args.batches_per_epoch
     epoch = i // args.batches_per_epoch
@@ -299,7 +305,10 @@ def reorder_fc(model):
     for i, c in enumerate(classes):
         w[c] = w_copy[i]
 
-corr_model = load_model(load_iters[-1])
+if args.final_model:
+    corr_model = load_final_model()
+else:
+    corr_model = load_model(load_iters[-1])
 corr_model = corr_model.model
 if not args.batch and not args.skip_reorder:
     reorder_fc(corr_model)
@@ -492,8 +501,9 @@ def test_run(device):
                                              root='./data', train=False, transform=None, mean_image=mean_image)
         else:
             vc_dataset_test = vc_dataset_train
-        #acc, w = test_vc_accuracy(args, corr_model, args.feat_vis_layer_name[-1], vc_dataset, vc_dataset_test, device=device,
-        #                          uniform_init=True, epochs=10)
+        acc, w = test_vc_accuracy_v1(args, corr_model, args.feat_vis_layer_name[-1], vc_dataset_train,
+                                                          vc_dataset_test, device=device, recall=args.vc_recall,
+                                                         train=True, uniform_init=True)
 
         vc_writer = CSVWriter(vc_save_file + '.csv', 'Iteration', *(str(idx) for idx in vc_dataset_test.kept_idxs))
         writers += [vc_writer]
