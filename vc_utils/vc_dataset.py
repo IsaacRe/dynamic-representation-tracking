@@ -127,7 +127,7 @@ def train_classification_layer_v1(args, network, module_name, vc_dset, device=0,
     #compute_corr(train_loader, network, act_tracker, module_name, device)
 
     num_epochs = 5
-    pbar = tqdm(len(train_loader) * num_epochs)
+    pbar = tqdm(total=len(train_loader) * num_epochs)
     losses = []
     for e in range(num_epochs):
 
@@ -186,10 +186,9 @@ def test_vc_accuracy_v1(args, network, module_name, vc_dset_train, vc_dset_test,
         act_tracker = ActivationTracker(module_names=[module_name], network=network, store_on_gpu=True)
     if classification_layer is None:
         if train:
-            while True:
-                classification_layer = train_classification_layer_v1(args, network, module_name, vc_dset_train,
-                                                                     device=device, act_tracker=act_tracker,
-                                                                     uniform_init=uniform_init)
+            classification_layer = train_classification_layer_v1(args, network, module_name, vc_dset_train,
+                                                                 device=device, act_tracker=act_tracker,
+                                                                 uniform_init=uniform_init)
             classification_layer.set_vc_idxs(vc_dset_test.kept_idxs)
         else:
             in_dim = 512
@@ -221,7 +220,7 @@ def test_vc_accuracy_v1(args, network, module_name, vc_dset_train, vc_dset_test,
             # Get total number of valid data points for each vc class
             total += valid.transpose(1, 0).flatten(start_dim=1, end_dim=3).sum(dim=1).cpu().numpy()
 
-    return correct / total * 100., classification_layer.conv1x1.weight.data.cpu()[:, :, 0, 0]
+    return correct / total * 100., classification_layer.weight.data.cpu()[:, :, 0, 0]
 
 
 def train_classification_layer_v2(args, network, module_name, vc_dset, device=0, act_tracker=None,
