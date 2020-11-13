@@ -209,6 +209,9 @@ parser.add_argument('--lr_threshold', type=float, default=0.04, help='Learning r
 parser.add_argument('--trainset_eval', action='store_true', help='evaluate on the training set')
 parser.add_argument('--final_model', type=str, default=None, help='specify different final model to be used')
 
+parser.add_argument('--train_stitching', action='store_true', help='train VCLogitLayer as stitching layer for'
+                                                                   'object classification task')
+
 # feature ablation analysis
 parser.add_argument('--feature_ablation', action='store_true', help='Perform feature ablation analysis')
 
@@ -447,7 +450,7 @@ def test_run(device):
                                                          batch_size=args.batch_size_corr, shuffle=False,
                                                          num_workers=0 if args.debug else args.num_workers,
                                                          pin_memory=True)
-    if args.ft_fc or args.eval_threshold_acc or args.validate_multiple_thresholds:
+    if args.ft_fc or args.eval_threshold_acc or args.validate_multiple_thresholds or args.train_stitching:
         train_loader = torch.utils.data.DataLoader(train_fc_set,
                                                    batch_size=args.batch_size_ft_fc, shuffle=True,
                                                    num_workers=0 if args.debug else args.num_workers,
@@ -501,9 +504,12 @@ def test_run(device):
                                              root='./data', train=False, transform=None, mean_image=mean_image)
         else:
             vc_dataset_test = vc_dataset_train
-        acc, w = test_vc_accuracy_v1(args, corr_model, args.feat_vis_layer_name[-1], vc_dataset_train,
-                                                          vc_dataset_test, device=device, recall=args.vc_recall,
-                                                         train=True, uniform_init=True)
+        if args.train_stitching:
+            vc_dataset_train = train_loader
+        # experiments
+        #acc, w = test_vc_accuracy_v1(args, corr_model, args.feat_vis_layer_name[-1], vc_dataset_train,
+        #                                                  vc_dataset_test, device=device, recall=args.vc_recall,
+        #                                                 train=True, uniform_init=True)
 
         vc_writer = CSVWriter(vc_save_file + '.csv', 'Iteration', *(str(idx) for idx in vc_dataset_test.kept_idxs))
         writers += [vc_writer]

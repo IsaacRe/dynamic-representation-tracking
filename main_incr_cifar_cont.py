@@ -196,6 +196,9 @@ parser.add_argument('--batch_size_train_vc', type=int, default=100, help='Batch 
                                                                          ' layer')
 parser.add_argument('--batch_size_test_vc', type=int, default=100, help='Batch size for testing VC classification')
 
+parser.add_argument('--train_stitching', action='store_true', help='train VCLogitLayer as stitching layer for'
+                                                                   'object classification task')
+
 # System options
 parser.add_argument("--test_freq", default=1, type=int,
                     help="Number of iterations of training after"

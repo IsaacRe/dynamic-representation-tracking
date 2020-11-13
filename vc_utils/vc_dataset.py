@@ -12,7 +12,7 @@ from dataset_batch_imagenet import ImageNet
 from vc_utils.activation_threshold import ConvActivationThreshold
 from vc_utils.activation_tracker import ActivationTracker
 from vc_utils.prune import Pruner
-from vc_utils.hook_utils import CustomContext, HookManager
+from vc_utils.hook_utils import CustomContext, HookManager, find_network_modules_by_name
 from vc_utils.dynamic_threshold import ThresholdLearner, sigmoid_with_temperature
 
 DATASETS = {'ImageNet': ImageNet, 'CIFAR': CIFAR20}
@@ -90,8 +90,50 @@ def compute_corr(loader, model, act_tracker, module_name, device):
     pass
 
 
+def train_stitching_layer(args, network, module_name, train_loader, device=0,
+                          stitching_layer=None, uniform_init=False):
+    in_dim = 512
+    if stitching_layer is None:
+        uniform_init = 1/512 if uniform_init else None
+        stitching_layer = VCLogitLayer(in_dim, np.arange(in_dim), uniform_init=uniform_init,
+                                       threshold_estimate=0).to(device)
+
+    insert_hook_mngr = insert_layer(network, module_name, stitching_layer)
+    ce = torch.nn.CrossEntropyLoss()
+    optim = torch.optim.Adam(stitching_layer.parameters(), lr=0.03)
+
+    num_epochs = 5
+    pbar = tqdm(total=len(train_loader) * num_epochs)
+    losses = []
+    for e in range(num_epochs):
+
+        if e == 4:
+            optim = torch.optim.Adam(stitching_layer.parameters(), lr=0.005)
+
+        for i, x, y in train_loader:
+
+            x, y = x.to(device), y.to(device)
+            out = network(x)
+            loss = ce(out, y)
+            losses += [loss.item()]
+            loss.backward()
+            optim.step()
+            optim.zero_grad()
+            pbar.update(1)
+
+    pbar.close()
+
+    # deactivate network hooks
+    insert_hook_mngr.deactivate_all_hooks()
+
+    # add threshold estimate for testing on vc dataset
+    stitching_layer.set_threshold(args.present_vc_threshold)
+
+    return stitching_layer
+
+
 def train_classification_layer_v1(args, network, module_name, vc_dset, device=0, act_tracker=None,
-                                  classification_layer=None, uniform_init=False):
+                                  classification_layer=None, uniform_init=False, use_dropout=False):
     if act_tracker is None:
         act_tracker = ActivationTracker(module_names=[module_name], network=network, store_on_gpu=True)
     in_dim = 512
@@ -102,6 +144,7 @@ def train_classification_layer_v1(args, network, module_name, vc_dset, device=0,
                                             threshold_estimate=args.present_vc_threshold).to(device)
 
     bce = torch.nn.BCEWithLogitsLoss(reduction='none')
+    dropout = torch.nn.Dropout(p=0.2)
     filter_weights = None
     weights = None
     optim = torch.optim.Adam(classification_layer.parameters(), lr=0.03)
@@ -155,6 +198,11 @@ def train_classification_layer_v1(args, network, module_name, vc_dset, device=0,
             with act_tracker.track_all_context():
                 network(img)
                 activations = act_tracker.get_module_activations(module_name, cpu=False)
+
+            # use dropout
+            if use_dropout:
+                activations = dropout(activations)
+
             out = classification_layer(activations)
             loss = bce(out, vc_lbl)
             weights[:] = 1.0
@@ -186,10 +234,15 @@ def test_vc_accuracy_v1(args, network, module_name, vc_dset_train, vc_dset_test,
         act_tracker = ActivationTracker(module_names=[module_name], network=network, store_on_gpu=True)
     if classification_layer is None:
         if train:
-            classification_layer = train_classification_layer_v1(args, network, module_name, vc_dset_train,
-                                                                 device=device, act_tracker=act_tracker,
-                                                                 uniform_init=uniform_init)
-            classification_layer.set_vc_idxs(vc_dset_test.kept_idxs)
+            if args.train_stitching:
+                train_loader = vc_dset_train
+                classification_layer = train_stitching_layer(args, network, module_name, train_loader,
+                                                             device=device, uniform_init=uniform_init)
+            else:
+                classification_layer = train_classification_layer_v1(args, network, module_name, vc_dset_train,
+                                                                     device=device, act_tracker=act_tracker,
+                                                                     uniform_init=uniform_init)
+                classification_layer.set_vc_idxs(vc_dset_test.kept_idxs)
         else:
             in_dim = 512
             classification_layer = VCLogitLayer(in_dim, vc_dset_test.kept_idxs, args.present_vc_threshold).to(device)
@@ -403,6 +456,18 @@ def _define_VisualConceptDataset(base_dataset):
     return VisualConceptDataset
 
 
+def insert_layer(network, after_module_name, insert_module, hook_manager=None, activate=True):
+    if hook_manager is None:
+        hook_manager = HookManager()
+    after_module, = find_network_modules_by_name(network, [after_module_name])
+    if not hasattr(after_module, 'appended_modules'):
+        after_module.appended_modules = []
+    after_module.appended_modules += [insert_module]
+    kwargs = {after_module_name: after_module}
+    hook_manager.register_forward_hook(lambda m, inp, out: insert_module(out), activate=activate, **kwargs)
+    return hook_manager
+
+
 class NullVisualConceptDataset:
 
     def __init__(self, *args, **kwargs):
@@ -427,6 +492,9 @@ class VCLogitLayer(torch.nn.Module):
             self.weight.data.fill_(uniform_init)
 
         #self.bias.data[:] = -threshold_estimate
+
+    def set_threshold(self, threshold):
+        self.threshold = threshold
 
     def forward(self, x):
         # normalize
