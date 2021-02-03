@@ -1,7 +1,3 @@
-# Incremental Object Learning from Contiguous Views
-This is the code for our CVPR 2019 paper [Incremental Object Learning from Contiguous Views](link)
-
-
 ### Requirements
 - Python 3.5+ 
 - [Pytorch 1.0.0](https://pytorch.org/)
@@ -28,7 +24,7 @@ This is a stripped down version of the code and does not include the entire CRIB
 The main program has a separate train and test process. Both can run simultaneously using 1 GPU provided that batch_size + test_batch_size images can fit on GPU memory. By default, the train and test processes use the first and second GPU devices visible, unless the '--one_gpu' flag is used, in which case both use the first device visible. 
 
 ```
-usage: main_incr_toys.py [-h] [--outfile OUTFILE] [--save_all]
+usage: main_incr_cifar.py [-h] [--outfile OUTFILE] [--save_all]
                [--save_all_dir SAVE_ALL_DIR] [--resume]
                [--resume_outfile RESUME_OUTFILE] [--init_lr INIT_LR]
                [--init_lr_ft INIT_LR_FT] [--num_epoch NUM_EPOCH]
@@ -98,19 +94,6 @@ optional arguments:
                         Maximum number of threads spawned at anystage of
                         execution
   --one_gpu             Option to run multiprocessing on 1 GPU
-```
-
-Following is an example command to run an incremental learning experiment on CRIB-Toys followed by the command to run a script for plotting results
-
-```bash
-python main_incr_toys.py --num_exemplars 600 --num_epoch 20 --total_classes 50 --num_iters 500 --algo icarl --pt --no_dist --batch_size 100 --diff_order --outfile results/icarl_pt_nd_50obj_10exp.csv
-python plot_results.py -f results/icarl_pt_nd_50obj_10exp.csv
-```
-
-### Citing
-If you use this code, please cite our work :
-```
-Bibitem
 ```
 
 We used donlee90's [Pytorch implementation of iCaRL](https://github.com/donlee90/icarl) as a starting point for our implementation.
