@@ -25,7 +25,7 @@ from feature_vis_2 import PatchTracker
 from feature_generalizability import ANOVATracker
 from vc_utils.vc_dataset import set_base_dataset, get_vc_dataset, test_vc_accuracy_v1
 from vc_utils.activation_tracker import ActivationTracker
-from prune_mask import store_prune_mask_model
+from prune_mask import store_prune_mask_model, store_prune_mask
 set_base_dataset('CIFAR')
 
 parser = argparse.ArgumentParser(description="Incremental learning")
@@ -175,6 +175,10 @@ parser.add_argument('--present_vc_threshold', type=float, default=1.0,
                          'considered present')
 parser.add_argument('--should_prune', action='store_true',
                     help='Actually performs pruning as opposed to just computing the masks')
+parser.add_argument('--final_prune', action='store_true',
+                    help='Perform pruning during training using final mask from another run')
+parser.add_argument('--prune_save_all_dir', type=str, default=None)
+parser.add_argument('--prune_final_iter', type=int, default=None)
 parser.add_argument('--save_pruned_path', type=str, default='prune_masks.npz',
                     help='Save path for computed prune masks')
 parser.add_argument('--load_pruned_path', type=str, default='prune_masks.npz',
@@ -587,7 +591,11 @@ def train_run(device):
             expanded_classes[s % args.test_freq] = None
             classes_seen.append(None)
 
-            if args.should_prune:
+            if args.final_prune:
+                # populate_with_previous_init(model, args.prune_final_iter, args.prune_save_all_dir)
+                model.populate_with_previous_init()
+                store_prune_mask(args.prune_final_iter, 90, args.prune_save_all_dir)
+            elif args.should_prune:
                 store_prune_mask_model(model, 80, args.save_all_dir)
 
             if train_counter.value == test_counter.value + args.test_freq:

@@ -294,10 +294,8 @@ class iCIFAR10(CIFAR10):
         Args:
             label : The requested label
         """
-        # num_images_label = len(self.all_train_coverage[np.array(self.all_train_labels) == label])
-        # num_images_covered = self.all_train_coverage[np.array(self.all_train_labels) == label].sum()
-        num_images_label = sum([len(self.all_train_coverage[np.array(self.all_train_labels) == l]) for l in label])
-        num_images_covered = sum([self.all_train_coverage[np.array(self.all_train_labels) == l].sum() for l in label])
+        num_images_label = len(self.all_train_coverage[np.array(self.all_train_labels) == label])
+        num_images_covered = self.all_train_coverage[np.array(self.all_train_labels) == label].sum()
 
         return num_images_covered*100./ num_images_label
 
