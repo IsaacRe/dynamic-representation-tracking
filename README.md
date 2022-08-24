@@ -1,5 +1,4 @@
-### Does COntinual Learning = Catastrophic Forgetting?
-This is code for our paper [Does Continual Learning = Catastrophoc Forgetting?](https://arxiv.org/pdf/2101.07295.pdf).
+### The Surprising Positive Knowledge Transfer in Continual 3D Object Shape Reconstruction
 
 ### Requirements
 - Python 3.5+ 
@@ -102,7 +101,7 @@ optional arguments:
 ### Citing
 If you use this code please cite our paper
 
-- Thai, Anh, et al. “Does Continual Learning = Catastrophic Forgetting?” *ArXiv:2101.07295 [Cs]*, Jan. 2021. *arXiv.org*, http://arxiv.org/abs/2101.07295.
+- Thai, Anh, et al. “The Surprising Positive Knowledge Transfer in Continual 3D Object Shape Reconstruction” *ArXiv:2101.07295 [Cs]*, Jan. 2021. *arXiv.org*, http://arxiv.org/abs/2101.07295.
 
 We used donlee90's [Pytorch implementation of iCaRL](https://github.com/donlee90/icarl) as a starting point for our implementation.
 
